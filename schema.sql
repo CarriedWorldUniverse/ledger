@@ -92,3 +92,23 @@ CREATE TABLE IF NOT EXISTS key_aliases (
 CREATE INDEX IF NOT EXISTS idx_key_aliases_new ON key_aliases(new_key);
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (4);
+
+-- -------------------------------------------------------------------
+-- Events (timeline)
+-- -------------------------------------------------------------------
+-- One row per timeline event. `kind` discriminates; `payload` JSON
+-- holds kind-specific fields. Append-only — never updated.
+CREATE TABLE IF NOT EXISTS events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  issue_key   TEXT NOT NULL REFERENCES issues(key) ON DELETE CASCADE ON UPDATE CASCADE,
+  seq         INTEGER NOT NULL,                          -- per-issue ordering
+  kind        TEXT NOT NULL,                             -- comment|transition|field_change|...
+  actor       TEXT NOT NULL,
+  at          TEXT NOT NULL DEFAULT (datetime('now')),
+  payload     TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_issue ON events(issue_key, seq);
+CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (5);

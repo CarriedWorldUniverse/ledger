@@ -99,6 +99,13 @@ func (s *Service) CreateIssue(ctx context.Context, d IssueDraft) (*Issue, error)
 		return nil, fmt.Errorf("insert issue: %w", err)
 	}
 
+	if err := writeEvent(ctx, tx, key, "create", d.Reporter, map[string]any{
+		"type":    d.Type,
+		"summary": d.Summary,
+	}); err != nil {
+		return nil, fmt.Errorf("write create event: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -157,54 +164,103 @@ func (s *Service) TransitionIssue(ctx context.Context, key, toStatus, actor stri
 	); err != nil {
 		return err
 	}
+	if err := writeEvent(ctx, tx, key, "transition", actor, map[string]any{
+		"from": fromStatus, "to": toStatus,
+	}); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
 // AssignIssue sets assignee_aspect or assignee_team (exactly one, or
-// both empty to clear). The actor is for the future events row.
+// both empty to clear).
 func (s *Service) AssignIssue(ctx context.Context, key, aspect, team, actor string) error {
 	if aspect != "" && team != "" {
 		return fmt.Errorf("AssignIssue: set aspect OR team, not both")
 	}
-	_, err := s.db.ExecContext(ctx,
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE issues SET assignee_aspect = ?, assignee_team = ?, updated_at = datetime('now') WHERE key = ?`,
 		nullable(aspect), nullable(team), key,
-	)
-	return err
+	); err != nil {
+		return err
+	}
+
+	val := aspect
+	if team != "" {
+		val = team
+	}
+	if err := writeEvent(ctx, tx, key, "field_change", actor, map[string]any{
+		"field": "assignee", "value": val,
+	}); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // UpdateIssue applies a patch atomically.
 func (s *Service) UpdateIssue(ctx context.Context, key string, patch UpdatePatch, actor string) error {
 	sets := []string{}
 	args := []any{}
+	events := []struct{ field, value string }{}
 	if patch.Summary != nil {
 		sets = append(sets, "summary = ?")
 		args = append(args, *patch.Summary)
+		events = append(events, struct{ field, value string }{"summary", *patch.Summary})
 	}
 	if patch.Description != nil {
 		sets = append(sets, "description = ?")
 		args = append(args, *patch.Description)
+		events = append(events, struct{ field, value string }{"description", *patch.Description})
 	}
 	if patch.DefinitionOfDone != nil {
 		sets = append(sets, "definition_of_done = ?")
 		args = append(args, *patch.DefinitionOfDone)
+		events = append(events, struct{ field, value string }{"definition_of_done", *patch.DefinitionOfDone})
 	}
 	if patch.Priority != nil {
 		sets = append(sets, "priority = ?")
 		args = append(args, *patch.Priority)
+		events = append(events, struct{ field, value string }{"priority", *patch.Priority})
 	}
 	if patch.ParentKey != nil {
 		sets = append(sets, "parent_key = ?")
 		args = append(args, nullable(*patch.ParentKey))
+		events = append(events, struct{ field, value string }{"parent_key", *patch.ParentKey})
 	}
 	if len(sets) == 0 {
 		return nil
 	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	sets = append(sets, "updated_at = datetime('now')")
 	args = append(args, key)
 	stmt := "UPDATE issues SET " + strings.Join(sets, ", ") + " WHERE key = ?"
-	_, err := s.db.ExecContext(ctx, stmt, args...)
-	return err
+	if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
+		return err
+	}
+
+	for _, ev := range events {
+		if err := writeEvent(ctx, tx, key, "field_change", actor, map[string]any{
+			"field": ev.field, "value": ev.value,
+		}); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (s *Service) fetchIssueByKey(ctx context.Context, key string) (*Issue, error) {
