@@ -115,8 +115,18 @@ func (s *Service) GetIssue(ctx context.Context, key string) (*Issue, error) {
 	if !errors.Is(err, ErrIssueNotFound) {
 		return nil, err
 	}
-	// Fallback: alias lookup (wired in Task 1.5 when project moves arrive).
-	return nil, ErrIssueNotFound
+	// Fallback: resolve via alias.
+	var newKey string
+	err = s.db.QueryRowContext(ctx,
+		`SELECT new_key FROM key_aliases WHERE old_key = ?`, key,
+	).Scan(&newKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrIssueNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.fetchIssueByKey(ctx, newKey)
 }
 
 // TransitionIssue moves an issue to a new status after validating the
