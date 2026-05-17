@@ -110,6 +110,37 @@ func (s *Service) GetIssue(ctx context.Context, key string) (*Issue, error) {
 	return nil, ErrIssueNotFound
 }
 
+// TransitionIssue moves an issue to a new status after validating the
+// state machine + DoD gate. The actor is recorded for the timeline
+// (events table; written by callers in Phase 2 — for now status-only).
+func (s *Service) TransitionIssue(ctx context.Context, key, toStatus, actor string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var issueType, fromStatus, dod string
+	err = tx.QueryRowContext(ctx,
+		`SELECT type, status, definition_of_done FROM issues WHERE key = ?`, key,
+	).Scan(&issueType, &fromStatus, &dod)
+	if err != nil {
+		return fmt.Errorf("TransitionIssue: load %s: %w", key, err)
+	}
+
+	if err := validateTransition(issueType, fromStatus, toStatus, dod); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE issues SET status = ?, updated_at = datetime('now') WHERE key = ?`,
+		toStatus, key,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Service) fetchIssueByKey(ctx context.Context, key string) (*Issue, error) {
 	var i Issue
 	var assigneeAspect, assigneeTeam, parentKey sql.NullString
