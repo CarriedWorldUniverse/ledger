@@ -127,3 +127,67 @@ CREATE TABLE IF NOT EXISTS watchers (
 );
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (6);
+
+-- -------------------------------------------------------------------
+-- Organisations + users (multi-tenancy, v7)
+-- -------------------------------------------------------------------
+-- Orgs own projects. Every project belongs to exactly one org.
+-- The default "nexus" org wraps all existing projects.
+CREATE TABLE IF NOT EXISTS organisations (
+  slug       TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Users are identities that can authenticate to the ledger.
+-- kind: human (operator, contributor) or ai (aspect).
+CREATE TABLE IF NOT EXISTS users (
+  id         TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('human', 'ai')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Per-org role for each user.
+CREATE TABLE IF NOT EXISTS org_members (
+  org        TEXT NOT NULL REFERENCES organisations(slug) ON DELETE CASCADE,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role       TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member', 'viewer')),
+  joined_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (org, user_id)
+);
+
+-- Backfill default org.
+INSERT OR IGNORE INTO organisations(slug, name) VALUES ('nexus', 'Nexus');
+
+-- Backfill known aspects + operator as users.
+INSERT OR IGNORE INTO users(id, kind) VALUES ('jacinta', 'human');
+INSERT OR IGNORE INTO users(id, kind) VALUES ('shadow',  'ai');
+INSERT OR IGNORE INTO users(id, kind) VALUES ('keel',    'ai');
+INSERT OR IGNORE INTO users(id, kind) VALUES ('anvil',   'ai');
+INSERT OR IGNORE INTO users(id, kind) VALUES ('plumb',   'ai');
+INSERT OR IGNORE INTO users(id, kind) VALUES ('forge',   'ai');
+INSERT OR IGNORE INTO users(id, kind) VALUES ('harrow',  'ai');
+INSERT OR IGNORE INTO users(id, kind) VALUES ('maren',   'ai');
+INSERT OR IGNORE INTO users(id, kind) VALUES ('verity',  'ai');
+INSERT OR IGNORE INTO users(id, kind) VALUES ('wren',    'ai');
+
+-- Backfill org memberships.
+INSERT OR IGNORE INTO org_members(org, user_id, role) VALUES ('nexus', 'jacinta', 'owner');
+INSERT OR IGNORE INTO org_members(org, user_id, role) VALUES ('nexus', 'shadow',  'admin');
+INSERT OR IGNORE INTO org_members(org, user_id, role) VALUES ('nexus', 'keel',    'member');
+INSERT OR IGNORE INTO org_members(org, user_id, role) VALUES ('nexus', 'anvil',   'member');
+INSERT OR IGNORE INTO org_members(org, user_id, role) VALUES ('nexus', 'plumb',   'member');
+INSERT OR IGNORE INTO org_members(org, user_id, role) VALUES ('nexus', 'forge',   'member');
+INSERT OR IGNORE INTO org_members(org, user_id, role) VALUES ('nexus', 'harrow',  'member');
+INSERT OR IGNORE INTO org_members(org, user_id, role) VALUES ('nexus', 'maren',   'member');
+INSERT OR IGNORE INTO org_members(org, user_id, role) VALUES ('nexus', 'verity',  'member');
+INSERT OR IGNORE INTO org_members(org, user_id, role) VALUES ('nexus', 'wren',    'member');
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (7);
+
+-- Add organisation column to projects. FK integrity is enforced at the
+-- application layer; SQLite ALTER TABLE ADD COLUMN does not enforce
+-- foreign-key constraints on the new column.
+ALTER TABLE projects ADD COLUMN organisation TEXT NOT NULL DEFAULT 'nexus';
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (8);
