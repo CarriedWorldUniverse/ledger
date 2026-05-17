@@ -79,6 +79,8 @@ func (s *Service) handleIssueByKey(w http.ResponseWriter, r *http.Request) {
 		s.respondAssign(w, r, key)
 	case r.Method == http.MethodPost && action == "comments":
 		s.respondComment(w, r, key)
+	case action == "watchers":
+		s.respondWatchers(w, r, key)
 	default:
 		http.Error(w, "method/path not supported", http.StatusMethodNotAllowed)
 	}
@@ -169,6 +171,55 @@ func (s *Service) respondComment(w http.ResponseWriter, r *http.Request, key str
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+}
+
+func (s *Service) respondWatchers(w http.ResponseWriter, r *http.Request, key string) {
+	switch r.Method {
+	case http.MethodGet:
+		list, err := s.Watchers(r.Context(), key)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if list == nil {
+			list = []string{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(list)
+
+	case http.MethodPost:
+		var raw struct {
+			Aspect string `json:"aspect"`
+			Actor  string `json:"actor"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := s.WatchIssue(r.Context(), key, raw.Aspect, raw.Actor); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+
+	case http.MethodDelete:
+		var raw struct {
+			Aspect string `json:"aspect"`
+			Actor  string `json:"actor"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := s.UnwatchIssue(r.Context(), key, raw.Aspect, raw.Actor); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Service) handleSearch(w http.ResponseWriter, r *http.Request) {

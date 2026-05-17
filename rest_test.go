@@ -165,3 +165,70 @@ func TestREST_AssignRoundtrip(t *testing.T) {
 		t.Errorf("assignee = %q, want %q", got.AssigneeAspect, "anvil")
 	}
 }
+
+func TestREST_WatchUnwatchRoundtrip(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	svc, err := New(ctx, Config{DBPath: filepath.Join(dir, "ledger.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+
+	issue, err := svc.CreateIssue(ctx, IssueDraft{
+		Project: "NEX", Type: "Story", Summary: "watch me",
+		DefinitionOfDone: "- [x] go", Reporter: "shadow",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(svc.Handler())
+	defer srv.Close()
+
+	// POST /api/issues/{key}/watchers
+	body, _ := json.Marshal(map[string]any{"aspect": "plumb", "actor": "plumb"})
+	resp, err := http.Post(srv.URL+"/api/issues/"+issue.Key+"/watchers", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("watch status = %d", resp.StatusCode)
+	}
+
+	// GET /api/issues/{key}/watchers
+	resp2, err := http.Get(srv.URL + "/api/issues/" + issue.Key + "/watchers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d", resp2.StatusCode)
+	}
+	var list []string
+	_ = json.NewDecoder(resp2.Body).Decode(&list)
+	if len(list) != 1 || list[0] != "plumb" {
+		t.Errorf("watchers = %v, want [plumb]", list)
+	}
+
+	// DELETE /api/issues/{key}/watchers
+	body3, _ := json.Marshal(map[string]any{"aspect": "plumb", "actor": "plumb"})
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/issues/"+issue.Key+"/watchers", bytes.NewReader(body3))
+	req.Header.Set("Content-Type", "application/json")
+	resp3, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("unwatch status = %d", resp3.StatusCode)
+	}
+
+	// Verify empty.
+	list2, _ := svc.Watchers(ctx, issue.Key)
+	if len(list2) != 0 {
+		t.Errorf("watchers after unwatch = %v", list2)
+	}
+}

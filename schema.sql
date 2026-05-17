@@ -112,3 +112,18 @@ CREATE INDEX IF NOT EXISTS idx_events_issue ON events(issue_key, seq);
 CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (5);
+
+-- -------------------------------------------------------------------
+-- Watchers
+-- -------------------------------------------------------------------
+-- One row per (issue, aspect) pair. Aspects watching an issue receive
+-- notifications on blocker transitions (see NEX-160 broker-backed
+-- notifier). Idempotent: INSERT OR IGNORE prevents duplicates.
+CREATE TABLE IF NOT EXISTS watchers (
+  issue_key  TEXT NOT NULL REFERENCES issues(key) ON DELETE CASCADE,
+  aspect     TEXT NOT NULL,
+  since      TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (issue_key, aspect)
+);
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (6);
