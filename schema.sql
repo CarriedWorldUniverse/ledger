@@ -48,3 +48,35 @@ CREATE TABLE IF NOT EXISTS team_members (
 );
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (2);
+
+-- -------------------------------------------------------------------
+-- Issues
+-- -------------------------------------------------------------------
+-- One row per ticket. Either assignee_aspect OR assignee_team is set
+-- (not both); NULL on both = unassigned.
+CREATE TABLE IF NOT EXISTS issues (
+  key                  TEXT PRIMARY KEY,                  -- e.g. "NEX-137"
+  project              TEXT NOT NULL REFERENCES projects(key),
+  seq                  INTEGER NOT NULL,                  -- denormalised for clarity
+  type                 TEXT NOT NULL,                     -- Epic|Story|Task|Subtask|Bug
+  status               TEXT NOT NULL,
+  summary              TEXT NOT NULL,
+  description          TEXT NOT NULL DEFAULT '',
+  definition_of_done   TEXT NOT NULL,                     -- required, can be minimal
+  priority             TEXT NOT NULL DEFAULT 'Medium',    -- Lowest|Low|Medium|High|Highest
+  priority_locked      INTEGER NOT NULL DEFAULT 0,
+  assignee_aspect      TEXT,
+  assignee_team        TEXT REFERENCES teams(name) ON DELETE SET NULL,
+  reporter             TEXT NOT NULL,                     -- immutable post-create
+  parent_key           TEXT REFERENCES issues(key) ON DELETE SET NULL,
+  created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (assignee_aspect IS NULL OR assignee_team IS NULL)  -- at most one
+);
+
+CREATE INDEX IF NOT EXISTS idx_issues_project_status ON issues(project, status);
+CREATE INDEX IF NOT EXISTS idx_issues_assignee_aspect ON issues(assignee_aspect) WHERE assignee_aspect IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_issues_assignee_team ON issues(assignee_team) WHERE assignee_team IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_key) WHERE parent_key IS NOT NULL;
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (3);
