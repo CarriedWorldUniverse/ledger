@@ -87,17 +87,32 @@ func (s *Service) handleIssueByKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) respondGet(w http.ResponseWriter, r *http.Request, key string) {
-	issue, err := s.GetIssue(r.Context(), key)
-	if errors.Is(err, ErrIssueNotFound) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+	switch r.URL.Query().Get("format") {
+	case "raw":
+		issue, err := s.GetIssue(r.Context(), key)
+		if errors.Is(err, ErrIssueNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(issue)
+	default: // markdown
+		md, err := s.MaterialiseMarkdown(r.Context(), key)
+		if errors.Is(err, ErrIssueNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		_, _ = w.Write([]byte(md))
 	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(issue)
 }
 
 func (s *Service) respondPatch(w http.ResponseWriter, r *http.Request, key string) {
