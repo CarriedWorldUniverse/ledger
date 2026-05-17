@@ -20,8 +20,9 @@ type Service struct {
 	db  *sql.DB
 }
 
-// New opens (or creates) ledger.db and returns a ready Service.
-// Subsequent phases will run the embedded schema migration here.
+// New opens (or creates) ledger.db, applies the embedded schema, and
+// returns a ready Service. schema.sql is idempotent, so applySchema runs
+// on every call.
 func New(ctx context.Context, cfg Config) (*Service, error) {
 	if cfg.DBPath == "" {
 		return nil, fmt.Errorf("ledger.New: DBPath required")
@@ -35,6 +36,10 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("ledger.New: ping: %w", err)
+	}
+	if err := applySchema(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 
 	return &Service{cfg: cfg, db: db}, nil
