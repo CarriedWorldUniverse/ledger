@@ -80,3 +80,15 @@ CREATE INDEX IF NOT EXISTS idx_issues_assignee_team ON issues(assignee_team) WHE
 CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_key) WHERE parent_key IS NOT NULL;
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (3);
+
+-- key_aliases maps old issue keys to current canonical keys after
+-- cross-project moves. Lookups by old key continue to resolve forever.
+CREATE TABLE IF NOT EXISTS key_aliases (
+  old_key   TEXT PRIMARY KEY,
+  new_key   TEXT NOT NULL REFERENCES issues(key) ON DELETE CASCADE,
+  moved_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_key_aliases_new ON key_aliases(new_key);
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (4);
