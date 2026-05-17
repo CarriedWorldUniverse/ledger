@@ -15,6 +15,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/api/issues", s.handleCreate)
 	mux.HandleFunc("/api/issues/", s.handleIssueByKey)
 	mux.HandleFunc("/api/issues/search", s.handleSearch)
+	mux.HandleFunc("/api/issues/updates", s.handleUpdates)
 	return mux
 }
 
@@ -235,6 +236,30 @@ func (s *Service) respondWatchers(w http.ResponseWriter, r *http.Request, key st
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Service) handleUpdates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	aspect := q.Get("aspect")
+	if aspect == "" {
+		http.Error(w, "aspect required", http.StatusBadRequest)
+		return
+	}
+	since := q.Get("since")
+	events, err := s.ListMyUpdates(r.Context(), aspect, since)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if events == nil {
+		events = []Event{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(events)
 }
 
 func (s *Service) handleSearch(w http.ResponseWriter, r *http.Request) {

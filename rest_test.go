@@ -232,3 +232,65 @@ func TestREST_WatchUnwatchRoundtrip(t *testing.T) {
 		t.Errorf("watchers after unwatch = %v", list2)
 	}
 }
+
+func TestREST_UpdatesEndpoint(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	svc, err := New(ctx, Config{DBPath: filepath.Join(dir, "ledger.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+	_, err = svc.CreateIssue(ctx, IssueDraft{
+		Project: "NEX", Type: "Story", Summary: "x",
+		DefinitionOfDone: "- [ ] go", Reporter: "shadow",
+		AssigneeAspect: "anvil",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := svc.Handler()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// GET /api/issues/updates?aspect=anvil
+	resp, err := http.Get(srv.URL + "/api/issues/updates?aspect=anvil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var events []Event
+	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 {
+		t.Error("expected non-empty events for assigned aspect")
+	}
+
+	// Missing aspect returns 400.
+	resp2, err := http.Get(srv.URL + "/api/issues/updates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing aspect; got %d", resp2.StatusCode)
+	}
+
+	// Irrelevant aspect returns empty array.
+	resp3, err := http.Get(srv.URL + "/api/issues/updates?aspect=forge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp3.Body.Close()
+	var empty []Event
+	_ = json.NewDecoder(resp3.Body).Decode(&empty)
+	if len(empty) != 0 {
+		t.Errorf("expected empty for irrelevant aspect; got %v", empty)
+	}
+}
