@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Handler returns the http.Handler that serves /api/issues/* + /healthz/issues.
+// Handler returns the http.Handler that serves /api/issues/* + /api/admin/* + /healthz/issues.
 // Mount under the nexus.exe broker's existing HTTPS listener.
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -16,6 +16,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/api/issues/", s.handleIssueByKey)
 	mux.HandleFunc("/api/issues/search", s.handleSearch)
 	mux.HandleFunc("/api/issues/updates", s.handleUpdates)
+	mux.Handle("/api/admin/", s.adminMux())
 	return mux
 }
 

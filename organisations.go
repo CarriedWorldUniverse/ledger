@@ -102,6 +102,127 @@ func (s *Service) AddOrgMember(ctx context.Context, org, userID, role string) er
 	return nil
 }
 
+// ListOrganisations returns all orgs, newest first.
+func (s *Service) ListOrganisations(ctx context.Context) ([]Organisation, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT slug, name FROM organisations ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Organisation
+	for rows.Next() {
+		var o Organisation
+		if err := rows.Scan(&o.Slug, &o.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// UpdateOrganisation changes an org's name.
+func (s *Service) UpdateOrganisation(ctx context.Context, slug, name string) error {
+	if name == "" {
+		return fmt.Errorf("UpdateOrganisation: name required")
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE organisations SET name = ? WHERE slug = ?`, name, slug,
+	)
+	if err != nil {
+		return fmt.Errorf("UpdateOrganisation: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("UpdateOrganisation: %s not found", slug)
+	}
+	return nil
+}
+
+// DeleteOrganisation removes an org. Fails if projects still reference it.
+func (s *Service) DeleteOrganisation(ctx context.Context, slug string) error {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM organisations WHERE slug = ?`, slug,
+	)
+	if err != nil {
+		return fmt.Errorf("DeleteOrganisation: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("DeleteOrganisation: %s not found", slug)
+	}
+	return nil
+}
+
+// ListUsers returns all users, newest first.
+func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, kind FROM users ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Kind); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// UpdateUser changes a user's kind.
+func (s *Service) UpdateUser(ctx context.Context, id, kind string) error {
+	if kind != "human" && kind != "ai" {
+		return fmt.Errorf("UpdateUser: kind must be 'human' or 'ai'")
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET kind = ? WHERE id = ?`, kind, id,
+	)
+	if err != nil {
+		return fmt.Errorf("UpdateUser: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("UpdateUser: %s not found", id)
+	}
+	return nil
+}
+
+// DeleteUser removes a user. Fails if they hold org memberships.
+func (s *Service) DeleteUser(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM users WHERE id = ?`, id,
+	)
+	if err != nil {
+		return fmt.Errorf("DeleteUser: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("DeleteUser: %s not found", id)
+	}
+	return nil
+}
+
+// RemoveOrgMember removes a user from an org.
+func (s *Service) RemoveOrgMember(ctx context.Context, org, userID string) error {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM org_members WHERE org = ? AND user_id = ?`, org, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("RemoveOrgMember: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("RemoveOrgMember: %s not a member of %s", userID, org)
+	}
+	return nil
+}
+
 // ListOrgMembers returns all members of an org.
 func (s *Service) ListOrgMembers(ctx context.Context, org string) ([]OrgMember, error) {
 	rows, err := s.db.QueryContext(ctx,
