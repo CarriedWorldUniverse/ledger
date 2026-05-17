@@ -43,6 +43,15 @@ type IssueDraft struct {
 	AssigneeTeam     string
 }
 
+// UpdatePatch holds optional field updates. Empty/nil fields = no change.
+type UpdatePatch struct {
+	Summary          *string
+	Description      *string
+	DefinitionOfDone *string
+	Priority         *string
+	ParentKey        *string
+}
+
 // ErrIssueNotFound is returned when no issue matches a key (or any alias).
 var ErrIssueNotFound = errors.New("ledger: issue not found")
 
@@ -139,6 +148,53 @@ func (s *Service) TransitionIssue(ctx context.Context, key, toStatus, actor stri
 		return err
 	}
 	return tx.Commit()
+}
+
+// AssignIssue sets assignee_aspect or assignee_team (exactly one, or
+// both empty to clear). The actor is for the future events row.
+func (s *Service) AssignIssue(ctx context.Context, key, aspect, team, actor string) error {
+	if aspect != "" && team != "" {
+		return fmt.Errorf("AssignIssue: set aspect OR team, not both")
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE issues SET assignee_aspect = ?, assignee_team = ?, updated_at = datetime('now') WHERE key = ?`,
+		nullable(aspect), nullable(team), key,
+	)
+	return err
+}
+
+// UpdateIssue applies a patch atomically.
+func (s *Service) UpdateIssue(ctx context.Context, key string, patch UpdatePatch, actor string) error {
+	sets := []string{}
+	args := []any{}
+	if patch.Summary != nil {
+		sets = append(sets, "summary = ?")
+		args = append(args, *patch.Summary)
+	}
+	if patch.Description != nil {
+		sets = append(sets, "description = ?")
+		args = append(args, *patch.Description)
+	}
+	if patch.DefinitionOfDone != nil {
+		sets = append(sets, "definition_of_done = ?")
+		args = append(args, *patch.DefinitionOfDone)
+	}
+	if patch.Priority != nil {
+		sets = append(sets, "priority = ?")
+		args = append(args, *patch.Priority)
+	}
+	if patch.ParentKey != nil {
+		sets = append(sets, "parent_key = ?")
+		args = append(args, nullable(*patch.ParentKey))
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	sets = append(sets, "updated_at = datetime('now')")
+	args = append(args, key)
+	stmt := "UPDATE issues SET " + strings.Join(sets, ", ") + " WHERE key = ?"
+	_, err := s.db.ExecContext(ctx, stmt, args...)
+	return err
 }
 
 func (s *Service) fetchIssueByKey(ctx context.Context, key string) (*Issue, error) {
