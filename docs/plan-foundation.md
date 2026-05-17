@@ -8,7 +8,34 @@
 
 **Tech Stack:** Go 1.25, `ncruces/go-sqlite3` (pure-Go WASM SQLite driver, matches existing pattern in `nexus/storage/`), `mark3labs/mcp-go` for MCP server, `goldmark` for markdown rendering (added). Embedded SQL schema via `//go:embed schema.sql` (matches `nexus/storage/schema.go` pattern).
 
-**Spec:** `/Users/jacinta/Source/nexus/docs/2026-05-17-native-issue-tracker-spec.md`
+**Spec:** [`docs/spec.md`](./spec.md) (mirrored from `~/Source/nexus/docs/2026-05-17-native-issue-tracker-spec.md`)
+
+---
+
+## Path conventions — please read first
+
+This plan was drafted before `ledger` was extracted into its own repo. Tasks below still use the **original** paths (`nexus/issues/...`, `issues.db`, `nexus-issue-mcp`). When executing, apply these renames consistently:
+
+| Plan text says | Actually means |
+|---|---|
+| `nexus/issues/<file>` | `~/Source/ledger/<file>` (separate repo, root package) |
+| `package issues` | `package ledger` |
+| `issues.New`, `issues.Service`, etc. | `ledger.New`, `ledger.Service`, etc. |
+| `issues.db` | `ledger.db` |
+| `nexus/issues/schema.sql` | `~/Source/ledger/schema.sql` |
+| `nexus-issue-mcp` binary | `nexus-ledger-mcp` |
+| `runtime/cmd/nexus-issue-mcp/` | `~/Source/nexus/runtime/cmd/nexus-ledger-mcp/` (stays in nexus repo — depends on `runtime/keyfile/` + `runtime/wsclient/`) |
+| `issue.<tool>` MCP tool names | `ledger.<tool>` |
+| `/api/issues/*` REST paths | `/api/ledger/*` |
+| `nexus/cmd/nexus/main.go` | unchanged — wiring still lives in nexus repo |
+
+**Two repos in play** for this work:
+- `~/Source/ledger/` — the new repo; primary code lives here
+- `~/Source/nexus/` — wiring tasks (Task 0.3, 1.8, 2.6, 1.11) touch this repo; nexus imports `ledger` via `go.mod`
+
+**go.mod handling**: while ledger isn't tagged, use a `replace` directive in nexus's go.mod pointing at the local ledger checkout. Tag ledger versions when each phase exits to lock the import.
+
+---
 
 **Scope (this plan):** Phases 0, 1, 2 only. Phase 3 (external sync via NEX-140), Phase 4 (attachments via NEX-139), Phase 5 (dashboard), Phase 6 (cutover), Phase 7 (deprecate `nexus-jira-mcp`) get their own plans once dependencies land.
 
