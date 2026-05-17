@@ -126,3 +126,78 @@ func (s *Service) Search(ctx context.Context, f SearchFilter) ([]IssueRef, error
 	}
 	return out, rows.Err()
 }
+
+// ListMy returns issues assigned to the given aspect, either directly
+// (assignee_aspect = aspect) or via a team membership (aspect in team_members
+// where teams.name = assignee_team).
+func (s *Service) ListMy(ctx context.Context, aspect string, teams []string) ([]IssueRef, error) {
+	clauses := []string{"assignee_aspect = ?"}
+	args := []any{aspect}
+	if len(teams) > 0 {
+		ph := strings.Repeat("?,", len(teams))
+		ph = strings.TrimRight(ph, ",")
+		clauses = append(clauses, fmt.Sprintf("assignee_team IN (%s)", ph))
+		for _, t := range teams {
+			args = append(args, t)
+		}
+	}
+
+	stmt := fmt.Sprintf(`
+			SELECT key, project, type, status, summary, priority,
+			       COALESCE(assignee_aspect, ''), COALESCE(assignee_team, ''), updated_at
+			FROM issues
+			WHERE (%s) AND status NOT IN ('Done', 'Cancelled', 'Delivered')
+			ORDER BY updated_at DESC
+			LIMIT 100`,
+		strings.Join(clauses, " OR "))
+
+	return s.runRefQuery(ctx, stmt, args)
+}
+
+// ListReady returns the top of the ready pool for the caller: issues
+// assigned to them (directly or via team) that are in a startable
+// state ("To Do" or "In Progress" continuing). Ordered by priority
+// then age.
+func (s *Service) ListReady(ctx context.Context, aspect string, teams []string) ([]IssueRef, error) {
+	clauses := []string{"assignee_aspect = ?"}
+	args := []any{aspect}
+	if len(teams) > 0 {
+		ph := strings.Repeat("?,", len(teams))
+		ph = strings.TrimRight(ph, ",")
+		clauses = append(clauses, fmt.Sprintf("assignee_team IN (%s)", ph))
+		for _, t := range teams {
+			args = append(args, t)
+		}
+	}
+
+	stmt := fmt.Sprintf(`
+			SELECT key, project, type, status, summary, priority,
+			       COALESCE(assignee_aspect, ''), COALESCE(assignee_team, ''), updated_at
+			FROM issues
+			WHERE (%s) AND status IN ('To Do', 'In Progress')
+			ORDER BY
+			  CASE priority WHEN 'Highest' THEN 5 WHEN 'High' THEN 4 WHEN 'Medium' THEN 3 WHEN 'Low' THEN 2 ELSE 1 END DESC,
+			  created_at ASC
+			LIMIT 50`,
+		strings.Join(clauses, " OR "))
+
+	return s.runRefQuery(ctx, stmt, args)
+}
+
+func (s *Service) runRefQuery(ctx context.Context, stmt string, args []any) ([]IssueRef, error) {
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []IssueRef
+	for rows.Next() {
+		var r IssueRef
+		if err := rows.Scan(&r.Key, &r.Project, &r.Type, &r.Status, &r.Summary, &r.Priority,
+			&r.AssigneeAspect, &r.AssigneeTeam, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

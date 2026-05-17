@@ -36,3 +36,37 @@ func TestSearch_ByAssigneeAndStatus(t *testing.T) {
 		t.Errorf("Key = %q, want %q", results[0].Key, a)
 	}
 }
+
+func TestListMy_ReturnsAspectAndTeamIssues(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+	_, _ = svc.CreateIssue(ctx, IssueDraft{Project: "NEX", Type: "Story", Summary: "mine",
+		DefinitionOfDone: "- [ ] go", Reporter: "shadow", AssigneeAspect: "anvil"})
+
+	results, err := svc.ListMy(ctx, "anvil", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len = %d", len(results))
+	}
+}
+
+func TestListReady_ExcludesNonStartable(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+	_, _ = svc.CreateIssue(ctx, IssueDraft{Project: "NEX", Type: "Story", Summary: "ready",
+		DefinitionOfDone: "- [ ] go", Reporter: "shadow", AssigneeAspect: "anvil"})
+
+	results, err := svc.ListReady(ctx, "anvil", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len = %d, want 1", len(results))
+	}
+}
