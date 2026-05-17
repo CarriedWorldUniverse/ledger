@@ -169,7 +169,22 @@ func (s *Service) TransitionIssue(ctx context.Context, key, toStatus, actor stri
 	}); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Fire-and-forget notifications after the transaction lands.
+	_ = s.notify.NotifyOperatorStream(ctx,
+		fmt.Sprintf("%s: %s → %s by %s", key, fromStatus, toStatus, actor))
+	if toStatus == "Blocked" || fromStatus == "Blocked" {
+		if watchers, _ := s.Watchers(ctx, key); len(watchers) > 0 {
+			for _, w := range watchers {
+				_ = s.notify.NotifyAspect(ctx, w,
+					fmt.Sprintf("%s blocker %s → %s", key, fromStatus, toStatus))
+			}
+		}
+	}
+	return nil
 }
 
 // AssignIssue sets assignee_aspect or assignee_team (exactly one, or
@@ -202,7 +217,16 @@ func (s *Service) AssignIssue(ctx context.Context, key, aspect, team, actor stri
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Fire-and-forget notifications after the transaction lands.
+	if aspect != "" {
+		_ = s.notify.NotifyAspect(ctx, aspect, fmt.Sprintf("Assigned: %s", key))
+	}
+	_ = s.notify.NotifyOperatorStream(ctx, fmt.Sprintf("%s assigned %s to %s", actor, key, val))
+	return nil
 }
 
 // UpdateIssue applies a patch atomically.

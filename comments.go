@@ -26,5 +26,16 @@ func (s *Service) CommentIssue(ctx context.Context, key, actor, body string) err
 	); err != nil {
 		return err
 	}
-	return tx.Commit()
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Fire-and-forget notifications after the transaction lands.
+	mentions := ParseMentions(body)
+	for _, m := range mentions {
+		_ = s.notify.NotifyAspect(ctx, m, fmt.Sprintf("Mentioned on %s by %s", key, actor))
+	}
+	_ = s.notify.NotifyOperatorStream(ctx, fmt.Sprintf("%s: %s commented", key, actor))
+	return nil
 }

@@ -12,12 +12,16 @@ import (
 type Config struct {
 	// DBPath is the on-disk location of ledger.db.
 	DBPath string
+	// Notifier is optional; defaults to a no-op. Wire a BrokerNotifier
+	// (from the nexus side) to enable chat notifications.
+	Notifier Notifier
 }
 
 // Service is the in-process issue tracker. One per nexus.exe.
 type Service struct {
-	cfg Config
-	db  *sql.DB
+	cfg    Config
+	db     *sql.DB
+	notify Notifier
 }
 
 // New opens (or creates) ledger.db, applies the embedded schema, and
@@ -42,7 +46,11 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		return nil, err
 	}
 
-	return &Service{cfg: cfg, db: db}, nil
+	notify := cfg.Notifier
+	if notify == nil {
+		notify = nopNotifier{}
+	}
+	return &Service{cfg: cfg, db: db, notify: notify}, nil
 }
 
 // Close releases the DB handle.
