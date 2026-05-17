@@ -77,6 +77,8 @@ func (s *Service) handleIssueByKey(w http.ResponseWriter, r *http.Request) {
 		s.respondTransition(w, r, key)
 	case r.Method == http.MethodPost && action == "assign":
 		s.respondAssign(w, r, key)
+	case r.Method == http.MethodPost && action == "comments":
+		s.respondComment(w, r, key)
 	default:
 		http.Error(w, "method/path not supported", http.StatusMethodNotAllowed)
 	}
@@ -151,6 +153,22 @@ func (s *Service) respondAssign(w http.ResponseWriter, r *http.Request, key stri
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Service) respondComment(w http.ResponseWriter, r *http.Request, key string) {
+	var raw struct {
+		Actor string `json:"actor"`
+		Body  string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.CommentIssue(r.Context(), key, raw.Actor, raw.Body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
 }
 
 func (s *Service) handleSearch(w http.ResponseWriter, r *http.Request) {
