@@ -8,22 +8,29 @@ import (
 )
 
 // Project is a top-level container for issues with its own key sequence.
+// Every project belongs to exactly one organisation.
 type Project struct {
-	Key         string
-	Name        string
-	Description string
-	DefaultTeam string // nullable; empty string = none
-	Archived    bool
+	Key          string
+	Organisation string
+	Name         string
+	Description  string
+	DefaultTeam  string // nullable; empty string = none
+	Archived     bool
 }
 
 // ErrProjectNotFound is returned by GetProject when no row matches.
 var ErrProjectNotFound = errors.New("ledger: project not found")
 
 // CreateProject inserts the project and seeds its sequence row.
-// Both happen in a single transaction.
+// Both happen in a single transaction. Defaults Organisation to "nexus"
+// if empty.
 func (s *Service) CreateProject(ctx context.Context, p Project) error {
 	if p.Key == "" || p.Name == "" {
 		return fmt.Errorf("CreateProject: Key and Name required")
+	}
+	org := p.Organisation
+	if org == "" {
+		org = "nexus"
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -33,8 +40,8 @@ func (s *Service) CreateProject(ctx context.Context, p Project) error {
 
 	defaultTeam := sql.NullString{Valid: p.DefaultTeam != "", String: p.DefaultTeam}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO projects(key, name, description, default_team, archived) VALUES (?, ?, ?, ?, ?)`,
-		p.Key, p.Name, p.Description, defaultTeam, boolToInt(p.Archived),
+		`INSERT INTO projects(key, organisation, name, description, default_team, archived) VALUES (?, ?, ?, ?, ?, ?)`,
+		p.Key, org, p.Name, p.Description, defaultTeam, boolToInt(p.Archived),
 	); err != nil {
 		return fmt.Errorf("insert project: %w", err)
 	}
@@ -53,9 +60,9 @@ func (s *Service) GetProject(ctx context.Context, key string) (*Project, error) 
 	var defaultTeam sql.NullString
 	var archived int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT key, name, description, default_team, archived FROM projects WHERE key = ?`,
+		`SELECT key, organisation, name, description, default_team, archived FROM projects WHERE key = ?`,
 		key,
-	).Scan(&p.Key, &p.Name, &p.Description, &defaultTeam, &archived)
+	).Scan(&p.Key, &p.Organisation, &p.Name, &p.Description, &defaultTeam, &archived)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrProjectNotFound
 	}
