@@ -17,6 +17,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/api/issues/search", s.handleSearch)
 	mux.HandleFunc("/api/issues/updates", s.handleUpdates)
 	mux.Handle("/api/admin/", s.adminMux())
+	mux.HandleFunc("/api/auth/refresh", s.handleAuthRefresh)
 	return mux
 }
 

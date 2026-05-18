@@ -6,26 +6,77 @@ import (
 	"strings"
 )
 
-// adminMux registers all /api/admin/* routes. Mounted in Handler().
-func (s *Service) adminMux() *http.ServeMux {
+func (s *Service) adminMux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/admin/orgs", s.handleAdminOrgs)
 	mux.HandleFunc("/api/admin/orgs/", s.handleAdminOrgBySlug)
 	mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
 	mux.HandleFunc("/api/admin/users/", s.handleAdminUserByID)
-	return mux
+	return s.authMiddleware(mux)
+}
+
+func (s *Service) authMiddleware(next http.Handler) http.Handler {
+	return authMiddleware(next, s.jwtSecret)
 }
 
 func (s *Service) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	if s.adminToken == "" {
+	if len(s.jwtSecret) == 0 {
 		return true
 	}
-	auth := r.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Bearer ") && strings.TrimPrefix(auth, "Bearer ") == s.adminToken {
+	claims := AuthFromContext(r.Context())
+	if claims == nil {
+		http.Error(w, `{"error":"auth_required"}`, http.StatusUnauthorized)
+		return false
+	}
+	if claims.Role != "owner" && claims.Role != "admin" {
+		http.Error(w, `{"error":"admin_required"}`, http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+func (s *Service) requireRole(w http.ResponseWriter, r *http.Request, org, minRole string) bool {
+	if len(s.jwtSecret) == 0 {
 		return true
 	}
-	http.Error(w, `{"error":"admin_required"}`, http.StatusForbidden)
-	return false
+	claims := AuthFromContext(r.Context())
+	if claims == nil {
+		http.Error(w, `{"error":"auth_required"}`, http.StatusUnauthorized)
+		return false
+	}
+	if claims.Org != org {
+		http.Error(w, `{"error":"admin_required"}`, http.StatusForbidden)
+		return false
+	}
+	if !roleAtLeast(claims.Role, minRole) {
+		http.Error(w, `{"error":"admin_required"}`, http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+func (s *Service) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	claims, err := s.resolveAuth(r)
+	if err != nil {
+		http.Error(w, `{"error":"auth_required"}`, http.StatusUnauthorized)
+		return
+	}
+	token, err := signJWT(*claims, s.jwtSecret)
+	if err != nil {
+		http.Error(w, `{"error":"internal_error"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // --- orgs ---
@@ -260,10 +311,4 @@ func (s *Service) handleAdminMemberByID(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }

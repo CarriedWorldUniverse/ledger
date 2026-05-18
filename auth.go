@@ -3,8 +3,10 @@ package ledger
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +18,7 @@ type AuthClaims struct {
 	Sub  string `json:"sub"`
 	Org  string `json:"org"`
 	Role string `json:"role"`
+	Jti  string `json:"jti"`
 	Iat  int64  `json:"iat"`
 	Exp  int64  `json:"exp"`
 }
@@ -31,6 +34,11 @@ func signJWT(claims AuthClaims, secret []byte) (string, error) {
 func signJWTWithTime(claims AuthClaims, secret []byte, now time.Time) (string, error) {
 	claims.Iat = now.Unix()
 	claims.Exp = now.Add(1 * time.Hour).Unix()
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("auth: generate jti: %w", err)
+	}
+	claims.Jti = hex.EncodeToString(b[:])
 
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	payloadBytes, err := json.Marshal(claims)
@@ -112,6 +120,17 @@ func authMiddleware(next http.Handler, secret []byte) http.Handler {
 		ctx := context.WithValue(r.Context(), authClaimsKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (s *Service) resolveAuth(r *http.Request) (*AuthClaims, error) {
+	if len(s.jwtSecret) == 0 {
+		return &AuthClaims{Sub: "open", Org: "", Role: "owner"}, nil
+	}
+	token := extractBearer(r)
+	if token == "" {
+		return nil, fmt.Errorf("auth: missing token")
+	}
+	return verifyJWT(token, s.jwtSecret)
 }
 
 func roleAtLeast(have, min string) bool {

@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -197,5 +198,180 @@ func TestAuthMiddleware_SkipsWhenNoSecret(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200 (open mode), got %d", rec.Code)
+	}
+}
+
+func TestRequireAdmin(t *testing.T) {
+	secret := []byte("test-secret")
+
+	tests := []struct {
+		name       string
+		role       string
+		wantStatus int
+	}{
+		{"owner allowed", "owner", http.StatusOK},
+		{"admin allowed", "admin", http.StatusOK},
+		{"member denied", "member", http.StatusForbidden},
+		{"viewer denied", "viewer", http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &Service{jwtSecret: secret}
+			claims := AuthClaims{Sub: "test", Org: "nexus", Role: tt.role}
+			token, _ := signJWT(claims, secret)
+
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !svc.requireAdmin(w, r) {
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			})
+			wrapped := svc.authMiddleware(handler)
+
+			req, _ := http.NewRequest("GET", "/", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+
+			wrapped.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestRequireAdmin_NoSecretOpenMode(t *testing.T) {
+	svc := &Service{jwtSecret: nil}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !svc.requireAdmin(w, r) {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := svc.authMiddleware(handler)
+
+	req, _ := http.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (open mode)", rec.Code)
+	}
+}
+
+func TestRequireRole(t *testing.T) {
+	secret := []byte("test-secret")
+
+	tests := []struct {
+		name      string
+		tokenOrg  string
+		tokenRole string
+		checkOrg  string
+		minRole   string
+		wantOK    bool
+	}{
+		{"same org, owner meets admin", "nexus", "owner", "nexus", "admin", true},
+		{"same org, admin meets member", "nexus", "admin", "nexus", "member", true},
+		{"same org, member meets viewer", "nexus", "member", "nexus", "viewer", true},
+		{"same org, viewer meets viewer", "nexus", "viewer", "nexus", "viewer", true},
+		{"same org, member fails admin", "nexus", "member", "nexus", "admin", false},
+		{"different org, owner fails", "nexus", "owner", "acme", "admin", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &Service{jwtSecret: secret}
+			claims := AuthClaims{Sub: "test", Org: tt.tokenOrg, Role: tt.tokenRole}
+			token, _ := signJWT(claims, secret)
+
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !svc.requireRole(w, r, tt.checkOrg, tt.minRole) {
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			})
+			wrapped := svc.authMiddleware(handler)
+
+			req, _ := http.NewRequest("GET", "/", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+
+			wrapped.ServeHTTP(rec, req)
+
+			if tt.wantOK && rec.Code != http.StatusOK {
+				t.Errorf("expected 200, got %d", rec.Code)
+			}
+			if !tt.wantOK && rec.Code != http.StatusForbidden {
+				t.Errorf("expected 403, got %d", rec.Code)
+			}
+		})
+	}
+}
+
+func TestAuthRefresh(t *testing.T) {
+	secret := []byte("test-secret")
+	claims := AuthClaims{Sub: "jacinta", Org: "nexus", Role: "owner"}
+	token, _ := signJWT(claims, secret)
+
+	svc := &Service{jwtSecret: secret}
+	h := svc.Handler()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/auth/refresh", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body struct {
+		Token string `json:"token"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body.Token == "" {
+		t.Fatal("expected new token in response")
+	}
+	if body.Token == token {
+		t.Error("expected fresh token, got same token")
+	}
+
+	newClaims, err := verifyJWT(body.Token, secret)
+	if err != nil {
+		t.Fatalf("verifyJWT of refreshed token: %v", err)
+	}
+	if newClaims.Sub != "jacinta" || newClaims.Org != "nexus" || newClaims.Role != "owner" {
+		t.Errorf("refreshed claims = %+v", newClaims)
+	}
+	if newClaims.Exp <= claims.Exp {
+		t.Error("expected refreshed token to have later expiry")
+	}
+}
+
+func TestAuthRefresh_RejectsGET(t *testing.T) {
+	secret := []byte("test-secret")
+
+	svc := &Service{jwtSecret: secret}
+	h := svc.Handler()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/auth/refresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", resp.StatusCode)
 	}
 }

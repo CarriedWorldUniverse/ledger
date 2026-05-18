@@ -12,17 +12,22 @@ import (
 
 func newTestAdminService(t *testing.T) (*Service, string) {
 	t.Helper()
+	secret := "test-secret"
 	svc, err := New(context.Background(), Config{
-		DBPath:     filepath.Join(t.TempDir(), "ledger.db"),
-		AdminToken: "test-admin-token",
+		DBPath:    filepath.Join(t.TempDir(), "ledger.db"),
+		JWTSecret: secret,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return svc, "test-admin-token"
+	return svc, secret
 }
 
-func adminReq(method, url, token string, body any) (*http.Request, error) {
+func adminClaims() AuthClaims {
+	return AuthClaims{Sub: "jacinta", Org: "nexus", Role: "owner"}
+}
+
+func adminReq(method, url, secret string, claims AuthClaims, body any) (*http.Request, error) {
 	var b []byte
 	if body != nil {
 		var err error
@@ -36,7 +41,11 @@ func adminReq(method, url, token string, body any) (*http.Request, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
+	if secret != "" && claims.Sub != "" {
+		token, err := signJWT(claims, []byte(secret))
+		if err != nil {
+			return nil, err
+		}
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	return req, nil
@@ -52,7 +61,7 @@ func doAdmin(t *testing.T, req *http.Request) *http.Response {
 }
 
 func TestAdmin_OrgCRUD(t *testing.T) {
-	svc, token := newTestAdminService(t)
+	svc, secret := newTestAdminService(t)
 	defer svc.Close()
 
 	h := svc.Handler()
@@ -60,7 +69,7 @@ func TestAdmin_OrgCRUD(t *testing.T) {
 	defer srv.Close()
 
 	// POST /api/admin/orgs — create
-	req, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/orgs", token, map[string]string{
+	req, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/orgs", secret, adminClaims(), map[string]string{
 		"slug": "acme", "name": "Acme Corp",
 	})
 	resp := doAdmin(t, req)
@@ -75,7 +84,7 @@ func TestAdmin_OrgCRUD(t *testing.T) {
 	}
 
 	// GET /api/admin/orgs/acme — read
-	req2, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs/acme", token, nil)
+	req2, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs/acme", secret, adminClaims(), nil)
 	resp2 := doAdmin(t, req2)
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
@@ -88,7 +97,7 @@ func TestAdmin_OrgCRUD(t *testing.T) {
 	}
 
 	// GET /api/admin/orgs — list
-	req3, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs", token, nil)
+	req3, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs", secret, adminClaims(), nil)
 	resp3 := doAdmin(t, req3)
 	defer resp3.Body.Close()
 	if resp3.StatusCode != http.StatusOK {
@@ -101,7 +110,7 @@ func TestAdmin_OrgCRUD(t *testing.T) {
 	}
 
 	// PUT /api/admin/orgs/acme — update
-	req4, _ := adminReq(http.MethodPut, srv.URL+"/api/admin/orgs/acme", token, map[string]string{
+	req4, _ := adminReq(http.MethodPut, srv.URL+"/api/admin/orgs/acme", secret, adminClaims(), map[string]string{
 		"name": "Acme Updated",
 	})
 	resp4 := doAdmin(t, req4)
@@ -111,7 +120,7 @@ func TestAdmin_OrgCRUD(t *testing.T) {
 	}
 
 	// DELETE /api/admin/orgs/acme — delete
-	req5, _ := adminReq(http.MethodDelete, srv.URL+"/api/admin/orgs/acme", token, nil)
+	req5, _ := adminReq(http.MethodDelete, srv.URL+"/api/admin/orgs/acme", secret, adminClaims(), nil)
 	resp5 := doAdmin(t, req5)
 	defer resp5.Body.Close()
 	if resp5.StatusCode != http.StatusOK {
@@ -119,7 +128,7 @@ func TestAdmin_OrgCRUD(t *testing.T) {
 	}
 
 	// GET /api/admin/orgs/acme — 404 after delete
-	req6, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs/acme", token, nil)
+	req6, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs/acme", secret, adminClaims(), nil)
 	resp6 := doAdmin(t, req6)
 	defer resp6.Body.Close()
 	if resp6.StatusCode != http.StatusNotFound {
@@ -128,32 +137,43 @@ func TestAdmin_OrgCRUD(t *testing.T) {
 }
 
 func TestAdmin_NonAdminRejected(t *testing.T) {
-	svc, _ := newTestAdminService(t)
+	svc, secret := newTestAdminService(t)
 	defer svc.Close()
 
 	h := svc.Handler()
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	// Without token
-	req, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs", "", nil)
+	// Without token → 401
+	req, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs", "", AuthClaims{}, nil)
 	resp := doAdmin(t, req)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected 403 without token; got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 without token; got %d", resp.StatusCode)
 	}
 
-	// With wrong token
-	req2, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs", "wrong-token", nil)
+	// Wrong secret → 401
+	wrongToken, _ := signJWT(adminClaims(), []byte("wrong-secret"))
+	req2, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/admin/orgs", nil)
+	req2.Header.Set("Authorization", "Bearer "+wrongToken)
 	resp2 := doAdmin(t, req2)
 	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusForbidden {
-		t.Errorf("expected 403 with wrong token; got %d", resp2.StatusCode)
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 with wrong secret; got %d", resp2.StatusCode)
+	}
+
+	// Valid token but insufficient role (viewer) → 403
+	viewerClaims := AuthClaims{Sub: "bob", Org: "nexus", Role: "viewer"}
+	req3, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs", secret, viewerClaims, nil)
+	resp3 := doAdmin(t, req3)
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403 with viewer role; got %d", resp3.StatusCode)
 	}
 }
 
 func TestAdmin_UserCRUD(t *testing.T) {
-	svc, token := newTestAdminService(t)
+	svc, secret := newTestAdminService(t)
 	defer svc.Close()
 
 	h := svc.Handler()
@@ -161,7 +181,7 @@ func TestAdmin_UserCRUD(t *testing.T) {
 	defer srv.Close()
 
 	// Create user
-	req, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/users", token, map[string]string{
+	req, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/users", secret, adminClaims(), map[string]string{
 		"id": "alice", "kind": "human",
 	})
 	resp := doAdmin(t, req)
@@ -171,7 +191,7 @@ func TestAdmin_UserCRUD(t *testing.T) {
 	resp.Body.Close()
 
 	// Get user
-	req2, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/users/alice", token, nil)
+	req2, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/users/alice", secret, adminClaims(), nil)
 	resp2 := doAdmin(t, req2)
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
@@ -179,7 +199,7 @@ func TestAdmin_UserCRUD(t *testing.T) {
 	}
 
 	// Update user kind
-	req3, _ := adminReq(http.MethodPut, srv.URL+"/api/admin/users/alice", token, map[string]string{
+	req3, _ := adminReq(http.MethodPut, srv.URL+"/api/admin/users/alice", secret, adminClaims(), map[string]string{
 		"kind": "ai",
 	})
 	resp3 := doAdmin(t, req3)
@@ -189,7 +209,7 @@ func TestAdmin_UserCRUD(t *testing.T) {
 	}
 
 	// Verify update
-	req4, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/users/alice", token, nil)
+	req4, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/users/alice", secret, adminClaims(), nil)
 	resp4 := doAdmin(t, req4)
 	defer resp4.Body.Close()
 	var u User
@@ -199,7 +219,7 @@ func TestAdmin_UserCRUD(t *testing.T) {
 	}
 
 	// Delete user
-	req5, _ := adminReq(http.MethodDelete, srv.URL+"/api/admin/users/alice", token, nil)
+	req5, _ := adminReq(http.MethodDelete, srv.URL+"/api/admin/users/alice", secret, adminClaims(), nil)
 	resp5 := doAdmin(t, req5)
 	defer resp5.Body.Close()
 	if resp5.StatusCode != http.StatusOK {
@@ -207,7 +227,7 @@ func TestAdmin_UserCRUD(t *testing.T) {
 	}
 
 	// 404 after delete
-	req6, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/users/alice", token, nil)
+	req6, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/users/alice", secret, adminClaims(), nil)
 	resp6 := doAdmin(t, req6)
 	defer resp6.Body.Close()
 	if resp6.StatusCode != http.StatusNotFound {
@@ -216,7 +236,7 @@ func TestAdmin_UserCRUD(t *testing.T) {
 }
 
 func TestAdmin_MemberLifecycle(t *testing.T) {
-	svc, token := newTestAdminService(t)
+	svc, secret := newTestAdminService(t)
 	defer svc.Close()
 
 	h := svc.Handler()
@@ -224,15 +244,15 @@ func TestAdmin_MemberLifecycle(t *testing.T) {
 	defer srv.Close()
 
 	// Create org and user
-	req0, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/orgs", token, map[string]string{"slug": "acme", "name": "Acme"})
+	req0, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/orgs", secret, adminClaims(), map[string]string{"slug": "acme", "name": "Acme"})
 	resp0 := doAdmin(t, req0)
 	resp0.Body.Close()
-	req1, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/users", token, map[string]string{"id": "alice", "kind": "human"})
+	req1, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/users", secret, adminClaims(), map[string]string{"id": "alice", "kind": "human"})
 	resp1 := doAdmin(t, req1)
 	resp1.Body.Close()
 
 	// Add member
-	req, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/orgs/acme/members", token, map[string]string{
+	req, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/orgs/acme/members", secret, adminClaims(), map[string]string{
 		"user_id": "alice", "role": "admin",
 	})
 	resp := doAdmin(t, req)
@@ -242,7 +262,7 @@ func TestAdmin_MemberLifecycle(t *testing.T) {
 	}
 
 	// List members
-	req2, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs/acme/members", token, nil)
+	req2, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs/acme/members", secret, adminClaims(), nil)
 	resp2 := doAdmin(t, req2)
 	defer resp2.Body.Close()
 	var members []OrgMember
@@ -252,7 +272,7 @@ func TestAdmin_MemberLifecycle(t *testing.T) {
 	}
 
 	// Change role
-	req3, _ := adminReq(http.MethodPut, srv.URL+"/api/admin/orgs/acme/members/alice", token, map[string]string{
+	req3, _ := adminReq(http.MethodPut, srv.URL+"/api/admin/orgs/acme/members/alice", secret, adminClaims(), map[string]string{
 		"role": "member",
 	})
 	resp3 := doAdmin(t, req3)
@@ -262,7 +282,7 @@ func TestAdmin_MemberLifecycle(t *testing.T) {
 	}
 
 	// Verify role
-	req4, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs/acme/members", token, nil)
+	req4, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs/acme/members", secret, adminClaims(), nil)
 	resp4 := doAdmin(t, req4)
 	defer resp4.Body.Close()
 	json.NewDecoder(resp4.Body).Decode(&members)
@@ -271,7 +291,7 @@ func TestAdmin_MemberLifecycle(t *testing.T) {
 	}
 
 	// Remove member
-	req5, _ := adminReq(http.MethodDelete, srv.URL+"/api/admin/orgs/acme/members", token, map[string]string{
+	req5, _ := adminReq(http.MethodDelete, srv.URL+"/api/admin/orgs/acme/members", secret, adminClaims(), map[string]string{
 		"user_id": "alice",
 	})
 	resp5 := doAdmin(t, req5)
@@ -281,7 +301,7 @@ func TestAdmin_MemberLifecycle(t *testing.T) {
 	}
 
 	// Verify empty
-	req6, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs/acme/members", token, nil)
+	req6, _ := adminReq(http.MethodGet, srv.URL+"/api/admin/orgs/acme/members", secret, adminClaims(), nil)
 	resp6 := doAdmin(t, req6)
 	defer resp6.Body.Close()
 	json.NewDecoder(resp6.Body).Decode(&members)
@@ -291,21 +311,21 @@ func TestAdmin_MemberLifecycle(t *testing.T) {
 }
 
 func TestAdmin_RejectsInvalidRole(t *testing.T) {
-	svc, token := newTestAdminService(t)
+	svc, secret := newTestAdminService(t)
 	defer svc.Close()
 
 	h := svc.Handler()
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	req0, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/orgs", token, map[string]string{"slug": "acme", "name": "Acme"})
+	req0, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/orgs", secret, adminClaims(), map[string]string{"slug": "acme", "name": "Acme"})
 	resp0 := doAdmin(t, req0)
 	resp0.Body.Close()
-	req1, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/users", token, map[string]string{"id": "alice", "kind": "human"})
+	req1, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/users", secret, adminClaims(), map[string]string{"id": "alice", "kind": "human"})
 	resp1 := doAdmin(t, req1)
 	resp1.Body.Close()
 
-	req, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/orgs/acme/members", token, map[string]string{
+	req, _ := adminReq(http.MethodPost, srv.URL+"/api/admin/orgs/acme/members", secret, adminClaims(), map[string]string{
 		"user_id": "alice", "role": "superuser",
 	})
 	resp := doAdmin(t, req)
@@ -316,13 +336,14 @@ func TestAdmin_RejectsInvalidRole(t *testing.T) {
 }
 
 func TestAdmin_MalformedJSON(t *testing.T) {
-	svc, token := newTestAdminService(t)
+	svc, secret := newTestAdminService(t)
 	defer svc.Close()
 
 	h := svc.Handler()
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
+	token, _ := signJWT(adminClaims(), []byte(secret))
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/admin/orgs", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
