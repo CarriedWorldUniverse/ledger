@@ -15,10 +15,9 @@ type Config struct {
 	// Notifier is optional; defaults to a no-op. Wire a BrokerNotifier
 	// (from the nexus side) to enable chat notifications.
 	Notifier Notifier
-	// AdminToken is the bearer token required for /api/admin/* endpoints.
-	// When empty, admin auth is skipped (open mode). Replace with JWT/keyfile
-	// resolution in PR 3.
-	AdminToken string
+	// JWTSecret is the HMAC-SHA256 shared secret for signing and verifying
+	// JWT auth tokens. When empty, admin auth is skipped (open mode).
+	JWTSecret string
 }
 
 // Service is the in-process issue tracker. One per nexus.exe.
@@ -26,7 +25,7 @@ type Service struct {
 	cfg        Config
 	db         *sql.DB
 	notify     Notifier
-	adminToken string
+	jwtSecret []byte
 }
 
 // New opens (or creates) ledger.db, applies the embedded schema, and
@@ -59,7 +58,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		cfg:        cfg,
 		db:         db,
 		notify:     notify,
-		adminToken: cfg.AdminToken,
+		jwtSecret: []byte(cfg.JWTSecret),
 	}, nil
 }
 
