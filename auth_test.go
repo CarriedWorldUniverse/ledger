@@ -316,6 +316,7 @@ func TestAuthRefresh(t *testing.T) {
 	secret := []byte("test-secret")
 	claims := AuthClaims{Sub: "jacinta", Org: "nexus", Role: "owner"}
 	token, _ := signJWT(claims, secret)
+	origClaims, _ := verifyJWT(token, secret)
 
 	svc := &Service{jwtSecret: secret}
 	h := svc.Handler()
@@ -352,8 +353,34 @@ func TestAuthRefresh(t *testing.T) {
 	if newClaims.Sub != "jacinta" || newClaims.Org != "nexus" || newClaims.Role != "owner" {
 		t.Errorf("refreshed claims = %+v", newClaims)
 	}
-	if newClaims.Exp <= claims.Exp {
-		t.Error("expected refreshed token to have later expiry")
+	if newClaims.Exp < origClaims.Exp {
+		t.Errorf("expected refreshed expiry %d >= original expiry %d", newClaims.Exp, origClaims.Exp)
+	}
+}
+
+func TestAuthRefresh_RejectsExpiredToken(t *testing.T) {
+	secret := []byte("test-secret")
+	claims := AuthClaims{Sub: "jacinta", Org: "nexus", Role: "owner"}
+	now := time.Now()
+	claims.Iat = now.Add(-2 * time.Hour).Unix()
+	claims.Exp = now.Add(-1 * time.Hour).Unix()
+	token, _ := signJWTWithTime(claims, secret, now.Add(-2*time.Hour))
+
+	svc := &Service{jwtSecret: secret}
+	h := svc.Handler()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/auth/refresh", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 for expired token; got %d", resp.StatusCode)
 	}
 }
 
