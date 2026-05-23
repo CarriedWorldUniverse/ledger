@@ -222,3 +222,40 @@ CREATE TABLE IF NOT EXISTS issue_links (
 CREATE INDEX IF NOT EXISTS idx_issue_links_to_type ON issue_links(to_key, type);
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (9);
+
+-- -------------------------------------------------------------------
+-- Project-scoped teams (v10)
+-- -------------------------------------------------------------------
+-- v1 simpler shape: teams gain a `project` column (NOT NULL, every
+-- team belongs to exactly one project). teams.name remains the
+-- primary key, so global uniqueness of team names is preserved AND
+-- existing FKs from issues.assignee_team / team_members continue to
+-- work unchanged. The trade-off is that two projects can't both have
+-- a team literally called "backend-team" — operator uses scoped
+-- naming like "nex-backend" / "oss-backend". A future evolution to
+-- composite (project, name) PK is left for a follow-up if the
+-- shared-name pain becomes real.
+--
+-- The orchestration scheduler reads teams.project to verify a team-
+-- assigned ticket's assignee_team is in the SAME project as the
+-- ticket; cross-project team assignment is rejected at the app
+-- layer (see AssignIssue + team-scope checks in teams.go).
+--
+-- Backfill: for each existing team, pick the project most-referenced
+-- by existing issues (via assignee_team) or projects (default_team),
+-- falling back to 'nexus' (the bootstrap org's default project) when
+-- nothing references it. Operator can rebalance via UpdateTeam later
+-- if the auto-pick is wrong.
+ALTER TABLE teams ADD COLUMN project TEXT NOT NULL DEFAULT 'nexus';
+
+UPDATE teams SET project = COALESCE(
+  (SELECT i.project FROM issues i WHERE i.assignee_team = teams.name LIMIT 1),
+  (SELECT p.key FROM projects p WHERE p.default_team = teams.name LIMIT 1),
+  'nexus'
+);
+
+-- Hot path: scheduler resolves team's project to validate cross-
+-- project assignment + to filter team listings to a single project.
+CREATE INDEX IF NOT EXISTS idx_teams_project ON teams(project);
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (10);
