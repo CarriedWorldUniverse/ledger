@@ -34,6 +34,15 @@ var (
 	// has members (or could be assigned to live issues — checked
 	// separately). Forces an explicit drain step.
 	ErrTeamNotEmpty = errors.New("ledger: team has members; remove them before deleting")
+
+	// ErrUserNotFound is returned when AddTeamMember references an
+	// aspect that doesn't exist in the users table. The
+	// team_members.aspect column has no SQL FK to users (it predates
+	// the multi-tenancy schema; adding REFERENCES to an existing
+	// column would require recreating the table). App-layer guard
+	// prevents orphan member rows pointing at deleted / never-
+	// existing users.
+	ErrUserNotFound = errors.New("ledger: user not found")
 )
 
 // CreateTeam adds a team scoped to the given project. The project
@@ -167,7 +176,13 @@ func (s *Service) ListTeams(ctx context.Context, project string) ([]Team, error)
 
 // AddTeamMember inserts an aspect into a team. Idempotent (INSERT
 // OR IGNORE) — adding the same aspect twice is a no-op without
-// error. Tenancy gate via the team's project.
+// error.
+//
+// Validation order:
+//   1. Team exists + tenancy gate via GetTeam.
+//   2. App-layer FK: aspect must exist as a user (ErrUserNotFound
+//      otherwise). team_members.aspect predates the users table and
+//      has no SQL FK; this prevents orphan member rows.
 func (s *Service) AddTeamMember(ctx context.Context, teamName, aspect string) error {
 	if teamName == "" || aspect == "" {
 		return fmt.Errorf("AddTeamMember: team and aspect required")
@@ -177,6 +192,17 @@ func (s *Service) AddTeamMember(ctx context.Context, teamName, aspect string) er
 		return err
 	}
 	_ = t // team-existence + tenancy already verified by GetTeam
+
+	// App-layer FK to users — aspect must exist as a user row.
+	var userExists int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM users WHERE id = ?)`, aspect,
+	).Scan(&userExists); err != nil {
+		return fmt.Errorf("AddTeamMember: check user: %w", err)
+	}
+	if userExists == 0 {
+		return fmt.Errorf("%w: %q", ErrUserNotFound, aspect)
+	}
 
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO team_members(team, aspect) VALUES (?, ?)`,
