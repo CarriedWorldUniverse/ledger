@@ -138,3 +138,126 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
+
+// UpdateProjectPatch holds optional project field updates. Empty/nil
+// fields = no change. Key + Organisation are immutable — moving a
+// project to a different org isn't a v1 operation and would require
+// a multi-step lifecycle (membership re-check, cross-org link audit).
+//
+// DefaultTeam is intentionally NOT in the patch v1 — proper
+// validation depends on teams.project (lands in #32). Follow-up PR
+// adds DefaultTeam support once #32 is on main.
+type UpdateProjectPatch struct {
+	Name        *string
+	Description *string
+}
+
+// ListProjects returns projects, optionally filtered to the caller's
+// org when an auth context is present (cross-org listing would leak
+// the projects keyspace). Archived projects are excluded unless
+// includeArchived is true.
+//
+// Result is sorted by project key for deterministic output.
+func (s *Service) ListProjects(ctx context.Context, includeArchived bool) ([]Project, error) {
+	q := `SELECT key, organisation, name, description, default_team, archived FROM projects`
+	args := []any{}
+	conds := []string{}
+
+	if claims := AuthFromContext(ctx); claims != nil && claims.Org != "" {
+		conds = append(conds, "organisation = ?")
+		args = append(args, claims.Org)
+	}
+	if !includeArchived {
+		conds = append(conds, "archived = 0")
+	}
+	if len(conds) > 0 {
+		q += " WHERE " + conds[0]
+		for i := 1; i < len(conds); i++ {
+			q += " AND " + conds[i]
+		}
+	}
+	q += " ORDER BY key"
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("ListProjects: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Project
+	for rows.Next() {
+		var p Project
+		var defaultTeam sql.NullString
+		var archived int
+		if err := rows.Scan(&p.Key, &p.Organisation, &p.Name, &p.Description, &defaultTeam, &archived); err != nil {
+			return nil, err
+		}
+		p.DefaultTeam = defaultTeam.String
+		p.Archived = archived != 0
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UpdateProject applies a patch atomically. Cross-org callers see
+// ErrProjectNotFound (hide-existence via GetProject's check).
+func (s *Service) UpdateProject(ctx context.Context, key string, patch UpdateProjectPatch) error {
+	// Tenancy + existence gate. GetProject hides cross-org as not-
+	// found so the caller can't probe.
+	if _, err := s.GetProject(ctx, key); err != nil {
+		return err
+	}
+
+	sets := []string{}
+	args := []any{}
+	if patch.Name != nil {
+		sets = append(sets, "name = ?")
+		args = append(args, *patch.Name)
+	}
+	if patch.Description != nil {
+		sets = append(sets, "description = ?")
+		args = append(args, *patch.Description)
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+
+	args = append(args, key)
+	stmt := "UPDATE projects SET " + sets[0]
+	for i := 1; i < len(sets); i++ {
+		stmt += ", " + sets[i]
+	}
+	stmt += " WHERE key = ?"
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
+		return fmt.Errorf("UpdateProject: %w", err)
+	}
+	return nil
+}
+
+// ArchiveProject marks the project as archived. Existing issues
+// stay accessible (no cascade); the project just disappears from
+// default ListProjects results.
+func (s *Service) ArchiveProject(ctx context.Context, key string) error {
+	return s.setArchived(ctx, key, true)
+}
+
+// UnarchiveProject flips an archived project back to active.
+func (s *Service) UnarchiveProject(ctx context.Context, key string) error {
+	return s.setArchived(ctx, key, false)
+}
+
+func (s *Service) setArchived(ctx context.Context, key string, archived bool) error {
+	if _, err := s.GetProject(ctx, key); err != nil {
+		return err // tenancy + existence gate
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE projects SET archived = ? WHERE key = ?`,
+		boolToInt(archived), key,
+	); err != nil {
+		return fmt.Errorf("setArchived: %w", err)
+	}
+	return nil
+}
