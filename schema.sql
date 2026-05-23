@@ -191,3 +191,34 @@ INSERT OR IGNORE INTO schema_versions(version) VALUES (7);
 ALTER TABLE projects ADD COLUMN organisation TEXT NOT NULL DEFAULT 'nexus';
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (8);
+
+-- -------------------------------------------------------------------
+-- Issue links (v9) — explicit edges between issues distinct from
+-- parent_key (which is the epic-child hierarchy). v1 supports:
+--
+--   'blocks'     from_key cannot be Done until to_key is terminal.
+--                Load-bearing for the orchestration scheduler — the
+--                "next unblocked task" computation queries this.
+--   'relates-to' editorial cross-reference; no orchestration effect.
+--
+-- Future types (duplicates, etc.) are validated at the application
+-- layer rather than via a CHECK constraint — adding a new value to
+-- a SQLite CHECK requires recreating the table, which is friction
+-- not worth paying when the validation is one if-statement in code.
+--
+-- FK ON UPDATE CASCADE so links survive cross-project moves (where
+-- the issue's key is rewritten — see move.go).
+CREATE TABLE IF NOT EXISTS issue_links (
+  from_key   TEXT NOT NULL REFERENCES issues(key) ON DELETE CASCADE ON UPDATE CASCADE,
+  to_key     TEXT NOT NULL REFERENCES issues(key) ON DELETE CASCADE ON UPDATE CASCADE,
+  type       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_by TEXT NOT NULL,
+  PRIMARY KEY (from_key, to_key, type)
+);
+
+-- "Who blocks me?" / "What links to me?" hot path — IsBlocked + the
+-- scheduler's unblock-fanout both filter by to_key + type.
+CREATE INDEX IF NOT EXISTS idx_issue_links_to_type ON issue_links(to_key, type);
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (9);
