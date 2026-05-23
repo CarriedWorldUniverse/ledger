@@ -146,3 +146,141 @@ func TestCreateProject_NoAuthContextSkipsMembershipCheck(t *testing.T) {
 		t.Errorf("no-auth create in acme: %v (membership check should have been skipped)", err)
 	}
 }
+func TestListProjects_FiltersByOrgWithAuth(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+
+	if _, err := svc.db.ExecContext(ctx,
+		`INSERT INTO organisations(slug, name) VALUES ('acme', 'Acme')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus", Organisation: "nexus"})
+	_ = svc.CreateProject(ctx, Project{Key: "ACM", Name: "Acme", Organisation: "acme"})
+
+	// No-auth caller sees both.
+	all, _ := svc.ListProjects(ctx, false)
+	if len(all) != 2 {
+		t.Errorf("no-auth list: got %d projects, want 2", len(all))
+	}
+
+	// Nexus caller sees only NEX.
+	nexusCtx := withClaims(ctx, "shadow", "nexus", "member")
+	nexusList, _ := svc.ListProjects(nexusCtx, false)
+	if len(nexusList) != 1 || nexusList[0].Key != "NEX" {
+		t.Errorf("nexus filter: got %+v", nexusList)
+	}
+}
+
+func TestListProjects_ArchivedExcludedByDefault(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+	_ = svc.CreateProject(ctx, Project{Key: "OLD", Name: "Old"})
+	if err := svc.ArchiveProject(ctx, "OLD"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Default: archived excluded.
+	active, _ := svc.ListProjects(ctx, false)
+	if len(active) != 1 || active[0].Key != "NEX" {
+		t.Errorf("active-only: got %+v", active)
+	}
+
+	// includeArchived=true: both.
+	all, _ := svc.ListProjects(ctx, true)
+	if len(all) != 2 {
+		t.Errorf("include-archived: got %d projects, want 2", len(all))
+	}
+}
+
+func TestUpdateProject_PatchesNameDescription(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus", Description: "initial"})
+
+	newName := "Nexus engineering"
+	newDesc := "updated"
+	if err := svc.UpdateProject(ctx, "NEX", UpdateProjectPatch{
+		Name:        &newName,
+		Description: &newDesc,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := svc.GetProject(ctx, "NEX")
+	if got.Name != newName || got.Description != newDesc {
+		t.Errorf("after patch: %+v", got)
+	}
+}
+
+func TestUpdateProject_EmptyPatchIsNoOp(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+
+	if err := svc.UpdateProject(ctx, "NEX", UpdateProjectPatch{}); err != nil {
+		t.Errorf("empty patch should be no-op, got %v", err)
+	}
+}
+
+func TestUpdateProject_HidesCrossOrg(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	if _, err := svc.db.ExecContext(ctx,
+		`INSERT INTO organisations(slug, name) VALUES ('acme', 'Acme')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = svc.CreateProject(ctx, Project{Key: "ACM", Name: "Acme", Organisation: "acme"})
+
+	nexusCtx := withClaims(ctx, "shadow", "nexus", "admin")
+	newName := "hijacked"
+	err := svc.UpdateProject(nexusCtx, "ACM", UpdateProjectPatch{Name: &newName})
+	if !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("got %v, want ErrProjectNotFound (hide-existence)", err)
+	}
+}
+
+func TestArchiveProject_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+
+	if err := svc.ArchiveProject(ctx, "NEX"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := svc.GetProject(ctx, "NEX")
+	if !got.Archived {
+		t.Error("project should be archived")
+	}
+
+	if err := svc.UnarchiveProject(ctx, "NEX"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = svc.GetProject(ctx, "NEX")
+	if got.Archived {
+		t.Error("project should be unarchived")
+	}
+}
+
+func TestArchiveProject_HidesCrossOrg(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	if _, err := svc.db.ExecContext(ctx,
+		`INSERT INTO organisations(slug, name) VALUES ('acme', 'Acme')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = svc.CreateProject(ctx, Project{Key: "ACM", Name: "Acme", Organisation: "acme"})
+
+	nexusCtx := withClaims(ctx, "shadow", "nexus", "admin")
+	err := svc.ArchiveProject(nexusCtx, "ACM")
+	if !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("got %v, want ErrProjectNotFound", err)
+	}
+}
