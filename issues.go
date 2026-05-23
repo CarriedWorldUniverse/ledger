@@ -113,27 +113,43 @@ func (s *Service) CreateIssue(ctx context.Context, d IssueDraft) (*Issue, error)
 	return s.GetIssue(ctx, key)
 }
 
-// GetIssue loads an issue by canonical key (or alias). Returns ErrIssueNotFound.
+// GetIssue loads an issue by canonical key (or alias). Returns
+// ErrIssueNotFound if absent OR if the caller's auth context (per
+// AuthFromContext) belongs to a different org from the issue's
+// project — cross-org access looks identical to "not found" to
+// avoid leaking issue keyspace across orgs.
 func (s *Service) GetIssue(ctx context.Context, key string) (*Issue, error) {
 	got, err := s.fetchIssueByKey(ctx, key)
-	if err == nil {
-		return got, nil
-	}
-	if !errors.Is(err, ErrIssueNotFound) {
-		return nil, err
-	}
-	// Fallback: resolve via alias.
-	var newKey string
-	err = s.db.QueryRowContext(ctx,
-		`SELECT new_key FROM key_aliases WHERE old_key = ?`, key,
-	).Scan(&newKey)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrIssueNotFound
+	if errors.Is(err, ErrIssueNotFound) {
+		// Fallback: resolve via alias.
+		var newKey string
+		aErr := s.db.QueryRowContext(ctx,
+			`SELECT new_key FROM key_aliases WHERE old_key = ?`, key,
+		).Scan(&newKey)
+		if errors.Is(aErr, sql.ErrNoRows) {
+			return nil, ErrIssueNotFound
+		}
+		if aErr != nil {
+			return nil, aErr
+		}
+		got, err = s.fetchIssueByKey(ctx, newKey)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return s.fetchIssueByKey(ctx, newKey)
+	// Tenancy check — hides the issue from cross-org callers.
+	if claims := AuthFromContext(ctx); claims != nil && claims.Org != "" {
+		var projectOrg string
+		if perr := s.db.QueryRowContext(ctx,
+			`SELECT organisation FROM projects WHERE key = ?`, got.Project,
+		).Scan(&projectOrg); perr != nil {
+			return nil, perr
+		}
+		if projectOrg != claims.Org {
+			return nil, ErrIssueNotFound
+		}
+	}
+	return got, nil
 }
 
 // TransitionIssue moves an issue to a new status after validating the
@@ -188,10 +204,36 @@ func (s *Service) TransitionIssue(ctx context.Context, key, toStatus, actor stri
 }
 
 // AssignIssue sets assignee_aspect or assignee_team (exactly one, or
-// both empty to clear).
+// both empty to clear). When an aspect is assigned and the caller's
+// auth context is set, the aspect must be a member of the ticket's
+// project's organisation — refused with ErrAssigneeNotInOrg
+// otherwise. Cross-org access to the issue is also enforced via
+// the same hide-existence pattern as GetIssue.
 func (s *Service) AssignIssue(ctx context.Context, key, aspect, team, actor string) error {
 	if aspect != "" && team != "" {
 		return fmt.Errorf("AssignIssue: set aspect OR team, not both")
+	}
+
+	// Tenancy gate (caller can see the issue) — same hide-existence
+	// pattern as GetIssue so attackers can't probe assignment to
+	// confirm an issue's existence.
+	if err := s.callerCanAccessIssue(ctx, key); err != nil {
+		return err
+	}
+
+	// If assigning to an aspect AND we have an auth context, verify
+	// the aspect is a member of the ticket's project's org. Skips
+	// when no auth context (in-process trusted caller).
+	if aspect != "" {
+		if claims := AuthFromContext(ctx); claims != nil && claims.Org != "" {
+			ok, err := s.aspectInOrg(ctx, aspect, claims.Org)
+			if err != nil {
+				return fmt.Errorf("AssignIssue: aspect-org check: %w", err)
+			}
+			if !ok {
+				return ErrAssigneeNotInOrg
+			}
+		}
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -229,8 +271,40 @@ func (s *Service) AssignIssue(ctx context.Context, key, aspect, team, actor stri
 	return nil
 }
 
-// UpdateIssue applies a patch atomically.
+// UpdateIssue applies a patch atomically. When the patch sets
+// ParentKey to a non-empty value, the new parent must live in the
+// same project as the issue being updated — cross-project parents
+// are refused with ErrCrossProjectParent. Cross-project moves go
+// through ReassignProject (move.go), which drops parent_key as part
+// of the move.
+//
+// Tenancy: cross-org access to the issue is gated the same way as
+// GetIssue — caller without rights sees ErrIssueNotFound.
 func (s *Service) UpdateIssue(ctx context.Context, key string, patch UpdatePatch, actor string) error {
+	if err := s.callerCanAccessIssue(ctx, key); err != nil {
+		return err
+	}
+
+	// Cross-project parent guard. Runs before the transaction so
+	// the validation cost is paid up front and we don't pollute the
+	// audit trail with rolled-back events.
+	if patch.ParentKey != nil && *patch.ParentKey != "" {
+		issueProject, err := s.projectOfIssue(ctx, key)
+		if err != nil {
+			return fmt.Errorf("UpdateIssue: load issue project: %w", err)
+		}
+		parentProject, err := s.projectOfIssue(ctx, *patch.ParentKey)
+		if errors.Is(err, ErrIssueNotFound) {
+			return fmt.Errorf("UpdateIssue: parent %q not found", *patch.ParentKey)
+		}
+		if err != nil {
+			return fmt.Errorf("UpdateIssue: load parent project: %w", err)
+		}
+		if parentProject != issueProject {
+			return ErrCrossProjectParent
+		}
+	}
+
 	sets := []string{}
 	args := []any{}
 	events := []struct{ field, value string }{}
