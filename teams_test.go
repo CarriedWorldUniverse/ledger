@@ -234,3 +234,46 @@ func TestSchemaMigration_TeamsBackfilledWithProject(t *testing.T) {
 		t.Errorf("default project = %q, want nexus", project)
 	}
 }
+
+// TestAddTeamMember_RejectsUnknownUser verifies the app-layer FK
+// guard (#15): aspect must exist in the users table. team_members
+// has no SQL FK to users (predates the multi-tenancy schema), so
+// the app layer prevents orphan member rows.
+func TestAddTeamMember_RejectsUnknownUser(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+	_ = svc.CreateTeam(ctx, "backend", "NEX", "")
+
+	err := svc.AddTeamMember(ctx, "backend", "non-existent-aspect")
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("got %v, want ErrUserNotFound", err)
+	}
+
+	// Confirm no row leaked through despite the rejection.
+	var n int
+	_ = svc.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM team_members WHERE team = ? AND aspect = ?`,
+		"backend", "non-existent-aspect",
+	).Scan(&n)
+	if n != 0 {
+		t.Errorf("orphan team_members row leaked: count=%d", n)
+	}
+}
+
+// TestAddTeamMember_AllowsKnownUser is the happy-path counterpart —
+// existing users from the schema backfill (anvil, keel, shadow, etc.)
+// add successfully. Guards against false-positive rejection.
+func TestAddTeamMember_AllowsKnownUser(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+	_ = svc.CreateTeam(ctx, "backend", "NEX", "")
+
+	// "anvil" is backfilled by the schema's users seed.
+	if err := svc.AddTeamMember(ctx, "backend", "anvil"); err != nil {
+		t.Errorf("known user add: %v", err)
+	}
+}
