@@ -21,14 +21,29 @@ var allowedTransitions = map[string]map[string][]string{
 	"Subtask": storyLikeTransitions(),
 }
 
+// Story/Task/Bug/Subtask state machine.
+//
+// "Ready to Start" sits between "To Do" and "In Progress" as the
+// explicit signal that a ticket is dispatch-ready (assigned, no
+// unresolved blockers). The orchestration scheduler (see the
+// orchestration-redesign spec) subscribes to status_changed events
+// of type "Ready to Start" rather than computing readiness from
+// (status + assignee + dependency state) on every event — cheaper
+// query, queryable history of when a ticket became ready.
+//
+// "Ready to Start" is OPTIONAL: manual operator-driven flow can still
+// transition "To Do" → "In Progress" directly. Auto-dispatched
+// orchestration uses the "To Do" → "Ready to Start" → "In Progress"
+// path so the scheduler sees the explicit signal.
 func storyLikeTransitions() map[string][]string {
 	return map[string][]string{
-		"To Do":       {"In Progress", "Cancelled"},
-		"In Progress": {"Blocked", "In Review", "Cancelled"},
-		"Blocked":     {"In Progress", "Cancelled"},
-		"In Review":   {"In Progress", "Done", "Cancelled"},
-		"Done":        {},
-		"Cancelled":   {},
+		"To Do":          {"Ready to Start", "In Progress", "Cancelled"},
+		"Ready to Start": {"In Progress", "Blocked", "To Do", "Cancelled"},
+		"In Progress":    {"Blocked", "In Review", "Ready to Start", "Cancelled"},
+		"Blocked":        {"In Progress", "Ready to Start", "Cancelled"},
+		"In Review":      {"In Progress", "Done", "Cancelled"},
+		"Done":           {},
+		"Cancelled":      {},
 	}
 }
 
