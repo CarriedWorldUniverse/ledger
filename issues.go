@@ -236,6 +236,26 @@ func (s *Service) AssignIssue(ctx context.Context, key, aspect, team, actor stri
 		}
 	}
 
+	// If assigning to a team, the team must be in the SAME project
+	// as the ticket. Cross-project team assignment is rejected per
+	// the orchestration spec (scheduler resolves team via the
+	// ticket's project's team list; cross-project teams have no
+	// resolvable membership in the ticket's project).
+	if team != "" {
+		issueProject, err := s.projectOfIssue(ctx, key)
+		if err != nil {
+			return fmt.Errorf("AssignIssue: load issue project: %w", err)
+		}
+		teamProject, err := s.teamProject(ctx, team)
+		if err != nil {
+			return err // ErrTeamNotFound bubbles up
+		}
+		if teamProject != issueProject {
+			return fmt.Errorf("%w: team=%q project=%q ticket project=%q",
+				ErrTeamProjectMismatch, team, teamProject, issueProject)
+		}
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
