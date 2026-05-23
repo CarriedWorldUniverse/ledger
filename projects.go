@@ -21,9 +21,32 @@ type Project struct {
 // ErrProjectNotFound is returned by GetProject when no row matches.
 var ErrProjectNotFound = errors.New("ledger: project not found")
 
+// ErrOrgNotFound signals an attempt to create / reference a project
+// in an organisation that doesn't exist. The schema can't enforce
+// the projects.organisation → organisations.slug FK (SQLite ALTER
+// TABLE ADD COLUMN doesn't accept FK constraints — see schema.sql),
+// so the integrity check lives at the application layer here.
+var ErrOrgNotFound = errors.New("ledger: organisation not found")
+
+// ErrCallerNotInOrg signals a refused CreateProject because the
+// authenticated caller (per AuthFromContext) isn't a member of the
+// target organisation. Hybrid: when no auth context is present
+// (in-process trusted callers), this check is skipped — see the
+// tenancy.go comment for the model.
+var ErrCallerNotInOrg = errors.New("ledger: caller is not a member of the target organisation")
+
 // CreateProject inserts the project and seeds its sequence row.
-// Both happen in a single transaction. Defaults Organisation to "nexus"
-// if empty.
+// Both happen in a single transaction. Defaults Organisation to
+// "nexus" when empty.
+//
+// Integrity checks (run before the transaction):
+//
+//   1. Organisation must exist (ErrOrgNotFound otherwise). Schema
+//      can't FK-enforce; app-layer guard prevents orphan projects
+//      pointing at deleted / never-existing orgs.
+//   2. When auth context is present, the caller must be a member of
+//      the target org (ErrCallerNotInOrg otherwise). Skipped when
+//      no claims (in-process trusted caller) — hybrid promise.
 func (s *Service) CreateProject(ctx context.Context, p Project) error {
 	if p.Key == "" || p.Name == "" {
 		return fmt.Errorf("CreateProject: Key and Name required")
@@ -32,6 +55,32 @@ func (s *Service) CreateProject(ctx context.Context, p Project) error {
 	if org == "" {
 		org = "nexus"
 	}
+
+	// #14: app-layer FK enforcement — organisation must exist.
+	var orgExists int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM organisations WHERE slug = ?)`, org,
+	).Scan(&orgExists); err != nil {
+		return fmt.Errorf("CreateProject: check org existence: %w", err)
+	}
+	if orgExists == 0 {
+		return fmt.Errorf("%w: %q", ErrOrgNotFound, org)
+	}
+
+	// #13: caller-must-be-org-member when auth context present.
+	if claims := AuthFromContext(ctx); claims != nil && claims.Sub != "" {
+		var isMember int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM org_members WHERE org = ? AND user_id = ?)`,
+			org, claims.Sub,
+		).Scan(&isMember); err != nil {
+			return fmt.Errorf("CreateProject: check membership: %w", err)
+		}
+		if isMember == 0 {
+			return fmt.Errorf("%w: caller=%q org=%q", ErrCallerNotInOrg, claims.Sub, org)
+		}
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
