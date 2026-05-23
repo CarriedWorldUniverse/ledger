@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -251,8 +252,28 @@ func (s *Service) handleUpdates(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "aspect required", http.StatusBadRequest)
 		return
 	}
-	since := q.Get("since")
-	events, err := s.ListMyUpdates(r.Context(), aspect, since)
+	// since_id is the event-id cursor; missing or 0 means "from the
+	// start." Malformed values are rejected loudly so a client typo
+	// doesn't silently reset their cursor and re-fetch everything.
+	var sinceID int64
+	if v := q.Get("since_id"); v != "" {
+		parsed, perr := strconv.ParseInt(v, 10, 64)
+		if perr != nil || parsed < 0 {
+			http.Error(w, "since_id must be a non-negative integer", http.StatusBadRequest)
+			return
+		}
+		sinceID = parsed
+	}
+	limit := 0 // 0 → service applies DefaultUpdatesLimit
+	if v := q.Get("limit"); v != "" {
+		parsed, perr := strconv.Atoi(v)
+		if perr != nil || parsed < 0 {
+			http.Error(w, "limit must be a non-negative integer", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	events, err := s.ListMyUpdates(r.Context(), aspect, sinceID, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -48,7 +48,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	_ = svc.TransitionIssue(ctx, issue.Key, "Done", "anvil")
 
 	// ListMyUpdates: assigned aspect sees events
-	anvilUpdates, err := svc.ListMyUpdates(ctx, "anvil", "")
+	anvilUpdates, err := svc.ListMyUpdates(ctx, "anvil", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// ListMyUpdates: watcher sees events
-	plumbUpdates, err := svc.ListMyUpdates(ctx, "plumb", "")
+	plumbUpdates, err := svc.ListMyUpdates(ctx, "plumb", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// ListMyUpdates: irrelevant aspect sees nothing
-	forgeUpdates, err := svc.ListMyUpdates(ctx, "forge", "")
+	forgeUpdates, err := svc.ListMyUpdates(ctx, "forge", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,14 +74,15 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		t.Errorf("forge should have no updates; got %d", len(forgeUpdates))
 	}
 
-	// ListMyUpdates: since filter respects timestamp
-	since := anvilUpdates[len(anvilUpdates)-1].At
-	afterLast, err := svc.ListMyUpdates(ctx, "anvil", since)
+	// ListMyUpdates: cursor (sinceID) filter is exact — past last id
+	// returns nothing.
+	lastID := anvilUpdates[len(anvilUpdates)-1].ID
+	afterLast, err := svc.ListMyUpdates(ctx, "anvil", lastID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(afterLast) != 0 {
-		t.Errorf("expected 0 events after last timestamp; got %d", len(afterLast))
+		t.Errorf("expected 0 events after last id %d; got %d", lastID, len(afterLast))
 	}
 
 	// Markdown materialisation
