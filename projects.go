@@ -54,7 +54,12 @@ func (s *Service) CreateProject(ctx context.Context, p Project) error {
 	return tx.Commit()
 }
 
-// GetProject loads a project by key. Returns ErrProjectNotFound if absent.
+// GetProject loads a project by key. Returns ErrProjectNotFound if
+// the project is absent OR if the caller's auth context (per
+// AuthFromContext) belongs to a different org — cross-org access
+// looks identical to "not found" to avoid leaking project keyspace
+// across orgs. Callers without an auth context (in-process trusted
+// callers) bypass the org check.
 func (s *Service) GetProject(ctx context.Context, key string) (*Project, error) {
 	var p Project
 	var defaultTeam sql.NullString
@@ -71,6 +76,10 @@ func (s *Service) GetProject(ctx context.Context, key string) (*Project, error) 
 	}
 	p.DefaultTeam = defaultTeam.String
 	p.Archived = archived != 0
+	// Tenancy check — hides the project from cross-org callers.
+	if claims := AuthFromContext(ctx); claims != nil && claims.Org != "" && claims.Org != p.Organisation {
+		return nil, ErrProjectNotFound
+	}
 	return &p, nil
 }
 
