@@ -1,0 +1,57 @@
+# goreleaser config for the ledger library.
+#
+# Ledger is a Go library — no standalone binary — so this config skips
+# the `builds:` section entirely and just produces a source archive +
+# checksums + auto-generated changelog on each `v*` tag push. The
+# release event is what `bundlectl resolve` consumes from the
+# nexus-platform repo (NEX-283) so the bundle assembly can track
+# which library version went into a given bundle.
+
+version: 2
+
+project_name: ledger
+
+before:
+  hooks:
+    - go mod tidy
+
+# No builds: library-only.
+builds:
+  - skip: true
+
+# Single source archive per release. Format `_v0.1.3.tar.gz` etc.
+source:
+  enabled: true
+  format: tar.gz
+  name_template: "{{ .ProjectName }}-source-{{ .Version }}"
+
+# Checksums for reproducible-build verification by downstream consumers.
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# Changelog auto-generated from git commits since the previous tag.
+# Filters drop the usual noise so the release notes stay focused on
+# meaningful changes.
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^style:"
+      - "merge conflict"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  github:
+    owner: CarriedWorldUniverse
+    name: ledger
+  # Mark as full release (not pre-release / draft) so GitHub releases
+  # API surfaces these on the standard tags endpoint that bundlectl
+  # uses (NEX-283).
+  draft: false
+  prerelease: auto
