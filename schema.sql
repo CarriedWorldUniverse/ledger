@@ -259,3 +259,15 @@ UPDATE teams SET project = COALESCE(
 CREATE INDEX IF NOT EXISTS idx_teams_project ON teams(project);
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (10);
+
+-- v11: external_refs holds a JSON array of {tracker, key, url, description?}
+-- objects so ledger issues can advertise their provenance back to source
+-- trackers (the Jira ticket that drove this work, the GitHub issue, etc).
+-- Aspects dispatched on a ledger issue can pull the source ticket directly
+-- via the URL field — no name-resolution dance required. JSON-encoded
+-- column rather than a separate table because the shape is small +
+-- caller-controlled + per-issue, and the existing single-row SELECT
+-- carries it without joins.
+ALTER TABLE issues ADD COLUMN external_refs TEXT NOT NULL DEFAULT '[]';
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (11);

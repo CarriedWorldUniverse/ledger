@@ -3,10 +3,24 @@ package ledger
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 )
+
+// ExternalRef points at a ticket in an external tracker (Jira, GitHub,
+// Linear, ...) that drove the creation of this ledger issue or is
+// otherwise relevant background context. Stored as JSON in the
+// external_refs column. URL is the direct-navigation link so an aspect
+// dispatched on the ledger issue can open the source ticket without
+// having to know the tracker's URL scheme.
+type ExternalRef struct {
+	Tracker     string `json:"tracker"`               // e.g. "jira", "github"
+	Key         string `json:"key"`                   // e.g. "NEX-271"
+	URL         string `json:"url"`                   // direct link
+	Description string `json:"description,omitempty"` // optional context
+}
 
 // Issue is the materialised row form. Aspects don't see this directly —
 // they see the materialised markdown document (see markdown.go).
@@ -25,6 +39,7 @@ type Issue struct {
 	AssigneeTeam     string // empty if unset
 	Reporter         string
 	ParentKey        string // empty if no parent
+	ExternalRefs     []ExternalRef
 	CreatedAt        string
 	UpdatedAt        string
 }
@@ -41,15 +56,19 @@ type IssueDraft struct {
 	ParentKey        string
 	AssigneeAspect   string
 	AssigneeTeam     string
+	ExternalRefs     []ExternalRef
 }
 
 // UpdatePatch holds optional field updates. Empty/nil fields = no change.
+// ExternalRefs uses a pointer-to-slice so callers can distinguish
+// "leave alone" (nil) from "clear" (&[]ExternalRef{}).
 type UpdatePatch struct {
 	Summary          *string
 	Description      *string
 	DefinitionOfDone *string
 	Priority         *string
 	ParentKey        *string
+	ExternalRefs     *[]ExternalRef
 }
 
 // ErrIssueNotFound is returned when no issue matches a key (or any alias).
@@ -89,12 +108,18 @@ func (s *Service) CreateIssue(ctx context.Context, d IssueDraft) (*Issue, error)
 
 	key := fmt.Sprintf("%s-%d", d.Project, seq)
 
+	externalRefsJSON, err := encodeExternalRefs(d.ExternalRefs)
+	if err != nil {
+		return nil, fmt.Errorf("encode external_refs: %w", err)
+	}
+
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO issues(key, project, seq, type, status, summary, description, definition_of_done,
-			priority, reporter, parent_key, assignee_aspect, assignee_team)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			priority, reporter, parent_key, assignee_aspect, assignee_team, external_refs)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		key, d.Project, seq, d.Type, defaultStatus, d.Summary, d.Description, d.DefinitionOfDone,
 		priority, d.Reporter, nullable(d.ParentKey), nullable(d.AssigneeAspect), nullable(d.AssigneeTeam),
+		externalRefsJSON,
 	); err != nil {
 		return nil, fmt.Errorf("insert issue: %w", err)
 	}
@@ -353,6 +378,15 @@ func (s *Service) UpdateIssue(ctx context.Context, key string, patch UpdatePatch
 		args = append(args, nullable(*patch.ParentKey))
 		events = append(events, struct{ field, value string }{"parent_key", *patch.ParentKey})
 	}
+	if patch.ExternalRefs != nil {
+		refsJSON, err := encodeExternalRefs(*patch.ExternalRefs)
+		if err != nil {
+			return fmt.Errorf("UpdateIssue: encode external_refs: %w", err)
+		}
+		sets = append(sets, "external_refs = ?")
+		args = append(args, refsJSON)
+		events = append(events, struct{ field, value string }{"external_refs", refsJSON})
+	}
 	if len(sets) == 0 {
 		return nil
 	}
@@ -385,14 +419,15 @@ func (s *Service) fetchIssueByKey(ctx context.Context, key string) (*Issue, erro
 	var i Issue
 	var assigneeAspect, assigneeTeam, parentKey sql.NullString
 	var priorityLocked int
+	var externalRefsJSON string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT key, project, seq, type, status, summary, description, definition_of_done,
 		       priority, priority_locked, assignee_aspect, assignee_team, reporter,
-		       parent_key, created_at, updated_at
+		       parent_key, external_refs, created_at, updated_at
 		FROM issues WHERE key = ?`, key,
 	).Scan(&i.Key, &i.Project, &i.Seq, &i.Type, &i.Status, &i.Summary, &i.Description,
 		&i.DefinitionOfDone, &i.Priority, &priorityLocked, &assigneeAspect, &assigneeTeam,
-		&i.Reporter, &parentKey, &i.CreatedAt, &i.UpdatedAt)
+		&i.Reporter, &parentKey, &externalRefsJSON, &i.CreatedAt, &i.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrIssueNotFound
 	}
@@ -403,7 +438,47 @@ func (s *Service) fetchIssueByKey(ctx context.Context, key string) (*Issue, erro
 	i.AssigneeTeam = assigneeTeam.String
 	i.ParentKey = parentKey.String
 	i.PriorityLocked = priorityLocked != 0
+	refs, derr := decodeExternalRefs(externalRefsJSON)
+	if derr != nil {
+		// Corrupt column shouldn't tank the whole fetch — log-via-error
+		// would be ideal here but Service has no logger today. Return
+		// empty refs and let consumers carry on; loud-fail is worse than
+		// silent-degrade when the rest of the issue is intact.
+		i.ExternalRefs = nil
+	} else {
+		i.ExternalRefs = refs
+	}
 	return &i, nil
+}
+
+// encodeExternalRefs marshals to the JSON text stored in the column.
+// nil / empty input maps to "[]" so the column NOT NULL DEFAULT '[]'
+// invariant holds.
+func encodeExternalRefs(refs []ExternalRef) (string, error) {
+	if len(refs) == 0 {
+		return "[]", nil
+	}
+	buf, err := json.Marshal(refs)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+// decodeExternalRefs is the inverse — empty / "[]" both yield nil so
+// "no refs" is one canonical empty value at the Go layer.
+func decodeExternalRefs(s string) ([]ExternalRef, error) {
+	if s == "" || s == "[]" {
+		return nil, nil
+	}
+	var refs []ExternalRef
+	if err := json.Unmarshal([]byte(s), &refs); err != nil {
+		return nil, err
+	}
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	return refs, nil
 }
 
 func validateDraft(d IssueDraft) error {
