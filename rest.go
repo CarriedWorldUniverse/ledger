@@ -28,16 +28,17 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var raw struct {
-		Project          string `json:"project"`
-		Type             string `json:"type"`
-		Summary          string `json:"summary"`
-		Description      string `json:"description"`
-		DefinitionOfDone string `json:"definition_of_done"`
-		Priority         string `json:"priority"`
-		Reporter         string `json:"reporter"`
-		ParentKey        string `json:"parent_key"`
-		AssigneeAspect   string `json:"assignee_aspect"`
-		AssigneeTeam     string `json:"assignee_team"`
+		Project          string        `json:"project"`
+		Type             string        `json:"type"`
+		Summary          string        `json:"summary"`
+		Description      string        `json:"description"`
+		DefinitionOfDone string        `json:"definition_of_done"`
+		Priority         string        `json:"priority"`
+		Reporter         string        `json:"reporter"`
+		ParentKey        string        `json:"parent_key"`
+		AssigneeAspect   string        `json:"assignee_aspect"`
+		AssigneeTeam     string        `json:"assignee_team"`
+		ExternalRefs     []ExternalRef `json:"external_refs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
@@ -48,6 +49,7 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Description: raw.Description, DefinitionOfDone: raw.DefinitionOfDone,
 		Priority: raw.Priority, Reporter: raw.Reporter, ParentKey: raw.ParentKey,
 		AssigneeAspect: raw.AssigneeAspect, AssigneeTeam: raw.AssigneeTeam,
+		ExternalRefs: raw.ExternalRefs,
 	}
 	issue, err := s.CreateIssue(r.Context(), d)
 	if err != nil {
@@ -123,12 +125,13 @@ func (s *Service) respondGet(w http.ResponseWriter, r *http.Request, key string)
 
 func (s *Service) respondPatch(w http.ResponseWriter, r *http.Request, key string) {
 	var raw struct {
-		Summary          *string `json:"summary"`
-		Description      *string `json:"description"`
-		DefinitionOfDone *string `json:"definition_of_done"`
-		Priority         *string `json:"priority"`
-		ParentKey        *string `json:"parent_key"`
-		Actor            string  `json:"actor"`
+		Summary          *string        `json:"summary"`
+		Description      *string        `json:"description"`
+		DefinitionOfDone *string        `json:"definition_of_done"`
+		Priority         *string        `json:"priority"`
+		ParentKey        *string        `json:"parent_key"`
+		ExternalRefs     *[]ExternalRef `json:"external_refs"`
+		Actor            string         `json:"actor"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -137,6 +140,7 @@ func (s *Service) respondPatch(w http.ResponseWriter, r *http.Request, key strin
 	patch := UpdatePatch{
 		Summary: raw.Summary, Description: raw.Description,
 		DefinitionOfDone: raw.DefinitionOfDone, Priority: raw.Priority, ParentKey: raw.ParentKey,
+		ExternalRefs: raw.ExternalRefs,
 	}
 	if err := s.UpdateIssue(r.Context(), key, patch, raw.Actor); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
