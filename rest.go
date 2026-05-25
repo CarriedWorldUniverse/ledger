@@ -85,6 +85,8 @@ func (s *Service) handleIssueByKey(w http.ResponseWriter, r *http.Request) {
 		s.respondComment(w, r, key)
 	case action == "watchers":
 		s.respondWatchers(w, r, key)
+	case action == "links":
+		s.respondLinks(w, r, key)
 	default:
 		http.Error(w, "method/path not supported", http.StatusMethodNotAllowed)
 	}
