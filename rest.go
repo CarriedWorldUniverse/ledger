@@ -17,6 +17,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/api/issues/", s.handleIssueByKey)
 	mux.HandleFunc("/api/issues/search", s.handleSearch)
 	mux.HandleFunc("/api/issues/updates", s.handleUpdates)
+	mux.HandleFunc("/api/projects", s.handleListProjects)
 	mux.Handle("/api/admin/", s.adminMux())
 	mux.HandleFunc("/api/auth/refresh", s.handleAuthRefresh)
 	return mux
@@ -289,6 +290,29 @@ func (s *Service) handleUpdates(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(events)
+}
+
+// handleListProjects powers GET /api/projects?include_archived=true|false.
+// Backs the issue.list_projects MCP tool (NEX-324) so aspects can
+// discover the keyspace they're allowed to create issues against.
+// Org filtering is applied inside Service.ListProjects when an auth
+// context is present.
+func (s *Service) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	includeArchived := r.URL.Query().Get("include_archived") == "true"
+	projects, err := s.ListProjects(r.Context(), includeArchived)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if projects == nil {
+		projects = []Project{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(projects)
 }
 
 func (s *Service) handleSearch(w http.ResponseWriter, r *http.Request) {
