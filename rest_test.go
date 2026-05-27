@@ -294,3 +294,34 @@ func TestREST_UpdatesEndpoint(t *testing.T) {
 		t.Errorf("expected empty for irrelevant aspect; got %v", empty)
 	}
 }
+
+// NEX-324: GET /api/projects backs the issue.list_projects MCP tool.
+// Aspects need to discover the keyspace they can create issues against.
+func TestREST_ListProjects(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	svc, err := New(ctx, Config{DBPath: filepath.Join(dir, "ledger.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+	_ = svc.CreateProject(ctx, Project{Key: "WAKE", Name: "WakeStone"})
+
+	srv := httptest.NewServer(svc.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var projects []Project
+	_ = json.NewDecoder(resp.Body).Decode(&projects)
+	if len(projects) != 2 {
+		t.Fatalf("got %d projects, want 2", len(projects))
+	}
+}
