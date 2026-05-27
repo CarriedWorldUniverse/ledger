@@ -48,21 +48,69 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 // on both = unassigned.") which a naive split would treat as a
 // statement boundary, producing nonsense SQL.
 //
-// This is still naive about strings / nested constructs — string
-// literals containing `;` would break it — but the embedded
-// schema.sql doesn't contain any, and adding a full tokenizer
-// would be a lot of code for a single-file schema.
+// BEGIN/END-aware: SQLite triggers (CREATE TRIGGER … BEGIN …; …; END;)
+// contain semicolons inside the body that must NOT split the outer
+// statement. The scanner tracks nesting depth of BEGIN/END keywords at
+// word boundaries and only treats `;` as a terminator when depth is 0.
+//
+// Still naive about string literals — a `;` inside a quoted string
+// would break things — but the embedded schema.sql doesn't contain any.
+// Adding a full tokenizer would be a lot of code for a single-file
+// schema; the BEGIN/END handling is the one piece we actually need.
 func splitSQLStatements(sql string) ([]string, error) {
 	clean := stripLineComments(sql)
 	out := make([]string, 0, 32)
-	for _, raw := range strings.Split(clean, ";") {
-		stmt := strings.TrimSpace(raw)
-		if stmt == "" {
+	var current strings.Builder
+	depth := 0
+
+	flush := func() {
+		s := strings.TrimSpace(current.String())
+		current.Reset()
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+
+	n := len(clean)
+	for i := 0; i < n; {
+		c := clean[i]
+		// Word boundary? Scan the word, treat BEGIN/END specially.
+		if isAlpha(c) && (i == 0 || !isWordByte(clean[i-1])) {
+			j := i
+			for j < n && isWordByte(clean[j]) {
+				j++
+			}
+			word := strings.ToUpper(clean[i:j])
+			current.WriteString(clean[i:j])
+			switch word {
+			case "BEGIN":
+				depth++
+			case "END":
+				if depth > 0 {
+					depth--
+				}
+			}
+			i = j
 			continue
 		}
-		out = append(out, stmt)
+		if c == ';' && depth == 0 {
+			flush()
+			i++
+			continue
+		}
+		current.WriteByte(c)
+		i++
 	}
+	flush()
 	return out, nil
+}
+
+func isAlpha(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func isWordByte(c byte) bool {
+	return isAlpha(c) || (c >= '0' && c <= '9') || c == '_'
 }
 
 // stripLineComments removes `-- ... \n` content per line, preserving

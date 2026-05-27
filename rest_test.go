@@ -325,3 +325,61 @@ func TestREST_ListProjects(t *testing.T) {
 		t.Fatalf("got %d projects, want 2", len(projects))
 	}
 }
+
+// NEX-323: GET /api/issues/search/text?q=... drives the issue.find_by_text
+// MCP tool. Exercises happy path, empty-query rejection, and limit parsing.
+func TestREST_SearchText(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	svc, err := New(ctx, Config{DBPath: filepath.Join(dir, "ledger.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+	target, _ := svc.CreateIssue(ctx, IssueDraft{
+		Project: "NEX", Type: "Story", Summary: "needle in haystack",
+		DefinitionOfDone: "- [ ] x", Reporter: "shadow",
+	})
+	_, _ = svc.CreateIssue(ctx, IssueDraft{
+		Project: "NEX", Type: "Story", Summary: "unrelated",
+		DefinitionOfDone: "- [ ] x", Reporter: "shadow",
+	})
+
+	srv := httptest.NewServer(svc.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/issues/search/text?q=needle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var refs []IssueRef
+	_ = json.NewDecoder(resp.Body).Decode(&refs)
+	if len(refs) != 1 || refs[0].Key != target.Key {
+		t.Fatalf("got %+v, want only %s", refs, target.Key)
+	}
+
+	// Empty q → 400.
+	r2, err := http.Get(srv.URL + "/api/issues/search/text?q=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r2.Body.Close()
+	if r2.StatusCode != http.StatusBadRequest {
+		t.Errorf("empty q: status = %d, want 400", r2.StatusCode)
+	}
+
+	// Bad limit → 400.
+	r3, err := http.Get(srv.URL + "/api/issues/search/text?q=needle&limit=abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r3.Body.Close()
+	if r3.StatusCode != http.StatusBadRequest {
+		t.Errorf("bad limit: status = %d, want 400", r3.StatusCode)
+	}
+}

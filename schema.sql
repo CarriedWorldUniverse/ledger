@@ -271,3 +271,87 @@ INSERT OR IGNORE INTO schema_versions(version) VALUES (10);
 ALTER TABLE issues ADD COLUMN external_refs TEXT NOT NULL DEFAULT '[]';
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (11);
+
+-- -------------------------------------------------------------------
+-- Full-text search (v12)
+-- -------------------------------------------------------------------
+-- FTS5 virtual table powering Service.FindByText + the issue.find_by_text
+-- MCP tool (NEX-323). Indexes the issue's natural-language text — summary,
+-- description, definition_of_done — and each comment body. Aspects ask
+-- "what mentions DeepSeek?" instead of having to know which fields hold
+-- what.
+--
+-- One row per searchable item rather than one row per issue:
+--   source='issue'   → issue body (summary || description || DoD)
+--   source='comment' → a single comment's body
+-- This avoids the rebuild-the-aggregate-on-every-comment dance and lets
+-- triggers stay one-statement-per-mutation. Search dedupes to issue keys
+-- in the application layer.
+--
+-- issue_key + source + event_id are UNINDEXED — they don't participate
+-- in MATCH; they're stored so we can dedupe + look up the parent issue
+-- without joining back through rowids.
+CREATE VIRTUAL TABLE IF NOT EXISTS issue_search USING fts5(
+  text,
+  issue_key UNINDEXED,
+  source UNINDEXED,
+  event_id UNINDEXED,
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+
+-- Keep issue_search current as issues + comments change. Triggers fire
+-- after the source row has committed locally so the FTS update is part
+-- of the same outer transaction.
+CREATE TRIGGER IF NOT EXISTS issue_search_issues_ai
+AFTER INSERT ON issues BEGIN
+  INSERT INTO issue_search(text, issue_key, source, event_id)
+  VALUES (NEW.summary || ' ' || NEW.description || ' ' || NEW.definition_of_done,
+          NEW.key, 'issue', NULL);
+END;
+
+CREATE TRIGGER IF NOT EXISTS issue_search_issues_au
+AFTER UPDATE OF summary, description, definition_of_done ON issues BEGIN
+  UPDATE issue_search
+  SET text = NEW.summary || ' ' || NEW.description || ' ' || NEW.definition_of_done
+  WHERE issue_key = NEW.key AND source = 'issue';
+END;
+
+CREATE TRIGGER IF NOT EXISTS issue_search_issues_ad
+AFTER DELETE ON issues BEGIN
+  DELETE FROM issue_search WHERE issue_key = OLD.key;
+END;
+
+-- ON UPDATE CASCADE on issues.key (move.go cross-project moves) walks
+-- the FK chain to events.issue_key etc., but FTS rows aren't FKed —
+-- mirror the rename explicitly so search keeps resolving to the new key.
+CREATE TRIGGER IF NOT EXISTS issue_search_issues_key_update
+AFTER UPDATE OF key ON issues BEGIN
+  UPDATE issue_search SET issue_key = NEW.key WHERE issue_key = OLD.key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS issue_search_events_ai
+AFTER INSERT ON events WHEN NEW.kind = 'comment' BEGIN
+  INSERT INTO issue_search(text, issue_key, source, event_id)
+  VALUES (COALESCE(json_extract(NEW.payload, '$.body'), ''),
+          NEW.issue_key, 'comment', NEW.id);
+END;
+
+-- Backfill: idempotent because each row has a NOT EXISTS guard against
+-- the matching natural-key tuple. On first apply this populates from
+-- pre-FTS data; on subsequent applies it's a no-op.
+INSERT INTO issue_search(text, issue_key, source, event_id)
+SELECT summary || ' ' || description || ' ' || definition_of_done, key, 'issue', NULL
+FROM issues
+WHERE NOT EXISTS (
+  SELECT 1 FROM issue_search WHERE issue_key = issues.key AND source = 'issue'
+);
+
+INSERT INTO issue_search(text, issue_key, source, event_id)
+SELECT COALESCE(json_extract(payload, '$.body'), ''), issue_key, 'comment', id
+FROM events
+WHERE kind = 'comment'
+  AND NOT EXISTS (
+    SELECT 1 FROM issue_search WHERE source = 'comment' AND event_id = events.id
+  );
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (12);
