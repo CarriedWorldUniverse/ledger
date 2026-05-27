@@ -16,6 +16,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/api/issues", s.handleCreate)
 	mux.HandleFunc("/api/issues/", s.handleIssueByKey)
 	mux.HandleFunc("/api/issues/search", s.handleSearch)
+	mux.HandleFunc("/api/issues/search/text", s.handleSearchText)
 	mux.HandleFunc("/api/issues/updates", s.handleUpdates)
 	mux.HandleFunc("/api/projects", s.handleListProjects)
 	mux.Handle("/api/admin/", s.adminMux())
@@ -329,6 +330,41 @@ func (s *Service) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(refs)
+}
+
+// handleSearchText powers GET /api/issues/search/text?q=...&limit=...
+// Backs the issue.find_by_text MCP tool (NEX-323) — FTS5 over issue
+// bodies + comment text. Query is passed through to FTS5's MATCH
+// dialect; callers can use phrases, AND/OR/NOT, prefix-with-*.
+func (s *Service) handleSearchText(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query().Get("q")
+	if strings.TrimSpace(q) == "" {
+		http.Error(w, "q required", http.StatusBadRequest)
+		return
+	}
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		parsed, perr := strconv.Atoi(v)
+		if perr != nil || parsed < 0 {
+			http.Error(w, "limit must be a non-negative integer", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	refs, err := s.FindByText(r.Context(), q, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if refs == nil {
+		refs = []IssueRef{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(refs)

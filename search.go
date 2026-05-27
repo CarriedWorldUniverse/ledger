@@ -184,6 +184,39 @@ func (s *Service) ListReady(ctx context.Context, aspect string, teams []string) 
 	return s.runRefQuery(ctx, stmt, args)
 }
 
+// FindByText runs an FTS5 full-text search over issue bodies (summary +
+// description + DoD) and comment bodies, returning matching issues
+// deduped and ranked by bm25. Powers the issue.find_by_text MCP tool
+// (NEX-323) — the AI-facing answer to "what tickets mention X".
+//
+// The query string is passed verbatim to FTS5, so callers can use the
+// MATCH dialect (quoted phrases, AND/OR/NOT, prefix-with-*, column
+// filters). Empty queries are rejected — FTS5 itself errors on empty
+// MATCH but the message is opaque; surface a clear sentinel instead.
+func (s *Service) FindByText(ctx context.Context, query string, limit int) ([]IssueRef, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("FindByText: empty query")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	stmt := `
+		SELECT i.key, i.project, i.type, i.status, i.summary, i.priority,
+		       COALESCE(i.assignee_aspect, ''), COALESCE(i.assignee_team, ''), i.updated_at
+		FROM issue_search s
+		JOIN issues i ON i.key = s.issue_key
+		WHERE issue_search MATCH ?
+		GROUP BY i.key
+		ORDER BY min(s.rank)
+		LIMIT ?`
+	return s.runRefQuery(ctx, stmt, []any{query, limit})
+}
+
 func (s *Service) runRefQuery(ctx context.Context, stmt string, args []any) ([]IssueRef, error) {
 	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
