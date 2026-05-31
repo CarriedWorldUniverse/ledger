@@ -31,7 +31,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/api/issues/search", s.handleSearch)
 	mux.HandleFunc("/api/issues/search/text", s.handleSearchText)
 	mux.HandleFunc("/api/issues/updates", s.handleUpdates)
-	mux.HandleFunc("/api/projects", s.handleListProjects)
+	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.Handle("/api/admin/", s.adminMux())
 	mux.HandleFunc("/api/auth/refresh", s.handleAuthRefresh)
 	return mux
@@ -310,6 +310,58 @@ func (s *Service) handleUpdates(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(events)
+}
+
+// handleProjects dispatches /api/projects: GET lists, POST creates. Project
+// creation is the structural step an issue tracker needs before any issue can
+// exist; the gateway gates POST with issue:admin (see cmd/ledger middleware),
+// so only an operator-level principal seeds the keyspace.
+func (s *Service) handleProjects(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListProjects(w, r)
+	case http.MethodPost:
+		s.handleCreateProject(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleCreateProject powers POST /api/projects. The project's organisation is
+// taken from the authenticated tenancy (X-CWB-Org / the auth claims), NEVER the
+// body — a caller cannot create a project in someone else's org. CreateProject
+// enforces that the org exists and the caller is a member.
+func (s *Service) handleCreateProject(w http.ResponseWriter, r *http.Request) {
+	var raw struct {
+		Key         string `json:"key"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		DefaultTeam string `json:"default_team"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	org := ""
+	if claims := AuthFromContext(r.Context()); claims != nil {
+		org = claims.Org
+	}
+	p := Project{
+		Key:         raw.Key,
+		Name:        raw.Name,
+		Description: raw.Description,
+		DefaultTeam: raw.DefaultTeam,
+		Organisation: org, // tenancy from auth, not the body
+	}
+	if err := s.CreateProject(r.Context(), p); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"key": raw.Key, "organisation": org, "name": raw.Name,
+	})
 }
 
 // handleListProjects powers GET /api/projects?include_archived=true|false.

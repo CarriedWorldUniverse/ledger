@@ -1,11 +1,62 @@
 package ledger
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 )
+
+// TestHandleCreateProject_HTTP exercises POST /api/projects end to end through
+// the Service handler: the project's org is taken from the authenticated
+// tenancy (not the body), and the caller must be a member of that org.
+func TestHandleCreateProject_HTTP(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+
+	if _, err := svc.CreateOrganisation(ctx, "acme", "Acme"); err != nil {
+		t.Fatalf("CreateOrganisation: %v", err)
+	}
+	if _, err := svc.CreateUser(ctx, "agent-1", "ai"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := svc.AddOrgMember(ctx, "acme", "agent-1", "member"); err != nil {
+		t.Fatalf("AddOrgMember: %v", err)
+	}
+
+	// POST with auth claims for org "acme"; body carries NO org.
+	body := bytes.NewBufferString(`{"key":"ACME","name":"Acme project"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", body)
+	req = req.WithContext(ContextWithAuth(req.Context(), &AuthClaims{Sub: "agent-1", Org: "acme"}))
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/projects = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+
+	// The project exists and is scoped to the authed org.
+	got, err := svc.GetProject(ContextWithAuth(ctx, &AuthClaims{Sub: "agent-1", Org: "acme"}), "ACME")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.Organisation != "acme" {
+		t.Errorf("project org = %q, want %q (from auth, not body)", got.Organisation, "acme")
+	}
+
+	// A caller who is not a member of the org is refused.
+	body2 := bytes.NewBufferString(`{"key":"NOPE","name":"Nope"}`)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/projects", body2)
+	req2 = req2.WithContext(ContextWithAuth(req2.Context(), &AuthClaims{Sub: "stranger", Org: "acme"}))
+	rec2 := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("non-member create = %d, want 400: %s", rec2.Code, rec2.Body.String())
+	}
+}
 
 func TestCreateProject_Roundtrip(t *testing.T) {
 	dir := t.TempDir()

@@ -29,6 +29,10 @@ func scopeForMethodPath(method, path string) string {
 	switch {
 	case strings.HasPrefix(path, "/api/admin/"):
 		return "issue:admin"
+	case path == "/api/projects" && method == http.MethodPost:
+		// Creating a project is a structural/operator op (parallels org+user
+		// setup), not an everyday agent write — gate it like admin.
+		return "issue:admin"
 	case strings.HasSuffix(path, "/claim") && method == http.MethodPost:
 		return "issue:claim"
 	case method == http.MethodGet:
