@@ -101,6 +101,16 @@ func AuthFromContext(ctx context.Context) *AuthClaims {
 	return claims
 }
 
+// ContextWithAuth returns ctx carrying the given auth claims, retrievable
+// via AuthFromContext. It is the exported seam the standalone cmd/ledger
+// server uses to inject gateway-derived identity (X-CWB-*) so the
+// library's existing tenancy/authorization gates fire the same way they
+// do for the embedded HS256 path. The embedded path continues to use the
+// internal authMiddleware unchanged.
+func ContextWithAuth(ctx context.Context, claims *AuthClaims) context.Context {
+	return context.WithValue(ctx, authClaimsKey, claims)
+}
+
 func authMiddleware(next http.Handler, secret []byte) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(secret) == 0 {

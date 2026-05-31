@@ -1,0 +1,19 @@
+# ledger container — tiny static Go binary on scratch.
+# Build from the ledger repo root:
+#   podman build -f cmd/ledger/Containerfile -t ledger:dev .
+#   podman save ledger:dev | sudo k3s ctr images import -
+#
+# Runtime config via env (see cmd/ledger/main.go):
+#   LEDGER_ADDR, LEDGER_DB, LEDGER_AUTH_MODE, LEDGER_JWT_SECRET
+FROM docker.io/library/golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ledger ./cmd/ledger
+
+FROM scratch
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /out/ledger /ledger
+EXPOSE 8081
+ENTRYPOINT ["/ledger"]
