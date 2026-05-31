@@ -27,6 +27,8 @@ func isPublicPath(path string) bool {
 // never accidentally world-open.
 func scopeForMethodPath(method, path string) string {
 	switch {
+	case method == http.MethodDelete && path == "/api/org":
+		return "org:purge"
 	case strings.HasPrefix(path, "/api/admin/"):
 		return "issue:admin"
 	case path == "/api/projects" && method == http.MethodPost:

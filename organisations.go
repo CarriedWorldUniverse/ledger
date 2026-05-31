@@ -140,6 +140,45 @@ func (s *Service) UpdateOrganisation(ctx context.Context, slug, name string) err
 	return nil
 }
 
+// PurgeOrganisation deletes an org and cascades its projects/issues. Unlike
+// DeleteOrganisation it is idempotent: an absent slug is a no-op (nil). Used by
+// the cross-org wipe (NEX-402).
+//
+// Note: projects.organisation was added via ALTER TABLE ADD COLUMN so SQLite
+// does not enforce a FK cascade from organisations→projects. This method
+// therefore performs an explicit transactional delete: issues (for the org's
+// projects) → projects → org.
+func (s *Service) PurgeOrganisation(ctx context.Context, slug string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("PurgeOrganisation: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Delete all issues belonging to any project in this org.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM issues WHERE project IN (SELECT key FROM projects WHERE organisation = ?)`, slug,
+	); err != nil {
+		return fmt.Errorf("PurgeOrganisation: delete issues: %w", err)
+	}
+	// Delete all projects in this org.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM projects WHERE organisation = ?`, slug,
+	); err != nil {
+		return fmt.Errorf("PurgeOrganisation: delete projects: %w", err)
+	}
+	// Delete the org itself (idempotent: 0 rows affected is fine).
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM organisations WHERE slug = ?`, slug,
+	); err != nil {
+		return fmt.Errorf("PurgeOrganisation: delete org: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("PurgeOrganisation: commit: %w", err)
+	}
+	return nil
+}
+
 // DeleteOrganisation removes an org. Fails if projects still reference it.
 func (s *Service) DeleteOrganisation(ctx context.Context, slug string) error {
 	res, err := s.db.ExecContext(ctx,

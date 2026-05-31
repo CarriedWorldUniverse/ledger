@@ -116,6 +116,7 @@ func TestScopeForMethodPath(t *testing.T) {
 		{"GET", "/api/admin/orgs", "issue:admin"},
 		{"POST", "/api/projects", "issue:admin"}, // project create is structural
 		{"GET", "/api/projects", "issue:read"},    // listing is a plain read
+		{"DELETE", "/api/org", "org:purge"},        // NEX-402 cross-org wipe
 	}
 	for _, c := range cases {
 		if got := scopeForMethodPath(c.method, c.path); got != c.want {
