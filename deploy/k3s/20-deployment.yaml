@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger
+  namespace: cwb
+  labels:
+    app: ledger
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ledger
+  template:
+    metadata:
+      labels:
+        app: ledger
+    spec:
+      containers:
+        - name: ledger
+          image: localhost/ledger:dev
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            - name: LEDGER_ADDR
+              value: ":8081"
+            - name: LEDGER_DB
+              value: "/var/lib/nexus/ledger.db"
+            - name: LEDGER_AUTH_MODE
+              # gateway: trust X-CWB-* injected by the mTLS interchange
+              # gateway. ledger is reachable only over that hop (ClusterIP,
+              # no ingress of its own), which is what makes header-trust safe.
+              value: "gateway"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/nexus
+          readinessProbe:
+            httpGet:
+              path: /healthz/issues
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz/issues
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ledger-data
