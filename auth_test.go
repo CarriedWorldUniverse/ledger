@@ -1,12 +1,22 @@
 package ledger
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+func TestContextWithAuth_RoundTrips(t *testing.T) {
+	want := &AuthClaims{Sub: "agent.anvil", Org: "carried-world", Role: "member"}
+	ctx := ContextWithAuth(context.Background(), want)
+	got := AuthFromContext(ctx)
+	if got == nil || got.Sub != want.Sub || got.Org != want.Org {
+		t.Fatalf("round-trip = %+v, want %+v", got, want)
+	}
+}
 
 func TestJWT_SignAndVerify(t *testing.T) {
 	secret := []byte("test-secret")
