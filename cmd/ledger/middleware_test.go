@@ -114,6 +114,8 @@ func TestScopeForMethodPath(t *testing.T) {
 		{"POST", "/api/issues/NEX-1/comments", "issue:write"},
 		{"POST", "/api/issues/NEX-1/claim", "issue:claim"},
 		{"GET", "/api/admin/orgs", "issue:admin"},
+		{"POST", "/api/projects", "issue:admin"}, // project create is structural
+		{"GET", "/api/projects", "issue:read"},    // listing is a plain read
 	}
 	for _, c := range cases {
 		if got := scopeForMethodPath(c.method, c.path); got != c.want {
