@@ -32,6 +32,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/api/issues/search/text", s.handleSearchText)
 	mux.HandleFunc("/api/issues/updates", s.handleUpdates)
 	mux.HandleFunc("/api/projects", s.handleProjects)
+	mux.HandleFunc("DELETE /api/org", s.handleOrgPurge)
 	mux.Handle("/api/admin/", s.adminMux())
 	mux.HandleFunc("/api/auth/refresh", s.handleAuthRefresh)
 	return mux
@@ -439,4 +440,24 @@ func (s *Service) handleSearchText(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(refs)
+}
+
+// handleOrgPurge powers DELETE /api/org. It deletes the caller's org (taken
+// from X-CWB-Org via claims.Org) and all its projects and issues. Idempotent:
+// an absent org slug is treated as already gone (200). Gated by org:purge
+// scope enforced automatically by the gatewayIdentity middleware
+// (scopeForMethodPath → "org:purge"). NEX-402.
+func (s *Service) handleOrgPurge(w http.ResponseWriter, r *http.Request) {
+	claims := AuthFromContext(r.Context())
+	if claims == nil || claims.Org == "" {
+		http.Error(w, `{"error":"no org context"}`, http.StatusBadRequest)
+		return
+	}
+	if err := s.PurgeOrganisation(r.Context(), claims.Org); err != nil {
+		http.Error(w, `{"error":"purge failed"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"purged": claims.Org})
 }

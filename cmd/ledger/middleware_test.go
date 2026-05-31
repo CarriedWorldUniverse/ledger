@@ -100,6 +100,25 @@ func TestGatewayMiddleware_InsufficientScope(t *testing.T) {
 	}
 }
 
+func TestHasScope_OrgPurgeRequiresExactMatch(t *testing.T) {
+	// issue:admin must NOT satisfy org:purge (destructive org-wipe route).
+	if hasScope([]string{"issue:admin"}, "org:purge") {
+		t.Fatal("issue:admin must not satisfy org:purge")
+	}
+	// org:purge satisfies org:purge.
+	if !hasScope([]string{"org:purge"}, "org:purge") {
+		t.Fatal("org:purge must satisfy org:purge")
+	}
+	// issue:admin still a superset for normal scopes.
+	if !hasScope([]string{"issue:admin"}, "issue:write") {
+		t.Fatal("issue:admin should still satisfy issue:write")
+	}
+	// A plain token without org:purge cannot purge.
+	if hasScope([]string{"issue:read", "issue:write"}, "org:purge") {
+		t.Fatal("non-purge token must not satisfy org:purge")
+	}
+}
+
 func TestScopeForMethodPath(t *testing.T) {
 	cases := []struct {
 		method, path, want string
@@ -116,6 +135,7 @@ func TestScopeForMethodPath(t *testing.T) {
 		{"GET", "/api/admin/orgs", "issue:admin"},
 		{"POST", "/api/projects", "issue:admin"}, // project create is structural
 		{"GET", "/api/projects", "issue:read"},    // listing is a plain read
+		{"DELETE", "/api/org", "org:purge"},        // NEX-402 cross-org wipe
 	}
 	for _, c := range cases {
 		if got := scopeForMethodPath(c.method, c.path); got != c.want {
