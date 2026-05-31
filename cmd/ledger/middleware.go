@@ -109,8 +109,13 @@ func parseScopes(raw string) []string {
 
 func hasScope(have []string, need string) bool {
 	for _, s := range have {
-		if s == need || s == "issue:admin" {
-			return true // issue:admin is a superset
+		if s == need {
+			return true
+		}
+		// issue:admin is a superset for ordinary scopes, but NOT for org:purge
+		// (the destructive org-wipe key, which must be held explicitly).
+		if s == "issue:admin" && need != "org:purge" {
+			return true
 		}
 	}
 	return false
