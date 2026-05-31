@@ -8,12 +8,25 @@ import (
 	"strings"
 )
 
+// effectiveActor returns the herald Subject (gateway path) if present,
+// else the body-supplied actor (embedded/in-process path). This is how a
+// mutation is attributed to the individual agent rather than a flat,
+// client-asserted string.
+func effectiveActor(r *http.Request, bodyActor string) string {
+	if sub := AuthSubject(r); sub != "" {
+		return sub
+	}
+	return bodyActor
+}
+
 // Handler returns the http.Handler that serves /api/issues/* + /api/admin/* + /healthz/issues.
 // Mount under the nexus.exe broker's existing HTTPS listener.
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz/issues", s.HealthzHandler())
 	mux.HandleFunc("/api/issues", s.handleCreate)
+	mux.HandleFunc("/api/issues/my", s.handleListMy)
+	mux.HandleFunc("/api/issues/ready", s.handleListReady)
 	mux.HandleFunc("/api/issues/", s.handleIssueByKey)
 	mux.HandleFunc("/api/issues/search", s.handleSearch)
 	mux.HandleFunc("/api/issues/search/text", s.handleSearchText)
@@ -46,10 +59,14 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	reporter := raw.Reporter
+	if sub := AuthSubject(r); sub != "" {
+		reporter = sub
+	}
 	d := IssueDraft{
 		Project: raw.Project, Type: raw.Type, Summary: raw.Summary,
 		Description: raw.Description, DefinitionOfDone: raw.DefinitionOfDone,
-		Priority: raw.Priority, Reporter: raw.Reporter, ParentKey: raw.ParentKey,
+		Priority: raw.Priority, Reporter: reporter, ParentKey: raw.ParentKey,
 		AssigneeAspect: raw.AssigneeAspect, AssigneeTeam: raw.AssigneeTeam,
 		ExternalRefs: raw.ExternalRefs,
 	}
@@ -87,6 +104,8 @@ func (s *Service) handleIssueByKey(w http.ResponseWriter, r *http.Request) {
 		s.respondAssign(w, r, key)
 	case r.Method == http.MethodPost && action == "comments":
 		s.respondComment(w, r, key)
+	case r.Method == http.MethodPost && action == "claim":
+		s.respondClaim(w, r, key)
 	case action == "watchers":
 		s.respondWatchers(w, r, key)
 	case action == "links":
@@ -144,7 +163,7 @@ func (s *Service) respondPatch(w http.ResponseWriter, r *http.Request, key strin
 		DefinitionOfDone: raw.DefinitionOfDone, Priority: raw.Priority, ParentKey: raw.ParentKey,
 		ExternalRefs: raw.ExternalRefs,
 	}
-	if err := s.UpdateIssue(r.Context(), key, patch, raw.Actor); err != nil {
+	if err := s.UpdateIssue(r.Context(), key, patch, effectiveActor(r, raw.Actor)); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -160,7 +179,7 @@ func (s *Service) respondTransition(w http.ResponseWriter, r *http.Request, key 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.TransitionIssue(r.Context(), key, raw.Status, raw.Actor); err != nil {
+	if err := s.TransitionIssue(r.Context(), key, raw.Status, effectiveActor(r, raw.Actor)); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -177,7 +196,7 @@ func (s *Service) respondAssign(w http.ResponseWriter, r *http.Request, key stri
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.AssignIssue(r.Context(), key, raw.Aspect, raw.Team, raw.Actor); err != nil {
+	if err := s.AssignIssue(r.Context(), key, raw.Aspect, raw.Team, effectiveActor(r, raw.Actor)); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -193,7 +212,7 @@ func (s *Service) respondComment(w http.ResponseWriter, r *http.Request, key str
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.CommentIssue(r.Context(), key, raw.Actor, raw.Body); err != nil {
+	if err := s.CommentIssue(r.Context(), key, effectiveActor(r, raw.Actor), raw.Body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
