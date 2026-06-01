@@ -1,0 +1,19 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ledger-tls
+  namespace: cwb
+spec:
+  secretName: ledger-tls
+  dnsNames:
+    - ledger.cwb.svc
+    - ledger.cwb.svc.cluster.local
+    - ledger
+  usages:
+    - server auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cwb-ca
+    kind: Issuer
