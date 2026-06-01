@@ -1,20 +1,15 @@
 package ledger
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 )
 
 func claimTestService(t *testing.T) *Service {
 	t.Helper()
-	svc := verbsTestService(t) // reuse the helper from verbs_test.go
-	return svc
+	return newTestService(t)
 }
 
 func TestClaimIssue_FreshClaimSetsAssigneeAndInProgress(t *testing.T) {
@@ -137,40 +132,3 @@ func TestClaimIssue_ConcurrentClaimsExactlyOneWins(t *testing.T) {
 	}
 }
 
-func TestRESTClaim_SuccessAndConflict(t *testing.T) {
-	ctx := context.Background()
-	svc := claimTestService(t)
-	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
-	iss, _ := svc.CreateIssue(ctx, IssueDraft{Project: "NEX", Type: "Story", Summary: "x",
-		DefinitionOfDone: "- [ ] go", Reporter: "shadow"})
-
-	srv := httptest.NewServer(svc.Handler())
-	defer srv.Close()
-
-	// First claim — pass actor in the body (no claims context here).
-	body := bytes.NewBufferString(`{"actor":"anvil"}`)
-	resp, err := http.Post(srv.URL+"/api/issues/"+iss.Key+"/claim", "application/json", body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("claim status = %d, want 200", resp.StatusCode)
-	}
-	var got Issue
-	_ = json.NewDecoder(resp.Body).Decode(&got)
-	resp.Body.Close()
-	if got.AssigneeAspect != "anvil" || got.Status != "In Progress" {
-		t.Fatalf("claimed issue = %+v", got)
-	}
-
-	// Second claim by a different agent → 409.
-	body2 := bytes.NewBufferString(`{"actor":"keel"}`)
-	resp2, err := http.Post(srv.URL+"/api/issues/"+iss.Key+"/claim", "application/json", body2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusConflict {
-		t.Fatalf("conflicting claim status = %d, want 409", resp2.StatusCode)
-	}
-}

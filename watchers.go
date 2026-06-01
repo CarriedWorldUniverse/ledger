@@ -7,6 +7,9 @@ import (
 // WatchIssue adds an aspect to an issue's watcher list. Idempotent —
 // watching an already-watched issue is a no-op.
 func (s *Service) WatchIssue(ctx context.Context, key, aspect, actor string) error {
+	if err := s.callerCanAccessIssue(ctx, key); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -32,6 +35,9 @@ func (s *Service) WatchIssue(ctx context.Context, key, aspect, actor string) err
 // UnwatchIssue removes an aspect from an issue's watcher list.
 // Unwatching a non-watched issue is a no-op.
 func (s *Service) UnwatchIssue(ctx context.Context, key, aspect, actor string) error {
+	if err := s.callerCanAccessIssue(ctx, key); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -57,6 +63,9 @@ func (s *Service) UnwatchIssue(ctx context.Context, key, aspect, actor string) e
 // Watchers returns the list of aspects watching an issue, ordered by
 // when they started watching (oldest first).
 func (s *Service) Watchers(ctx context.Context, key string) ([]string, error) {
+	if err := s.callerCanAccessIssue(ctx, key); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT aspect FROM watchers WHERE issue_key = ? ORDER BY since ASC`, key,
 	)

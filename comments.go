@@ -9,6 +9,9 @@ import (
 // CommentIssue appends a comment to the issue's timeline. Comments are
 // immutable; the only way to "correct" one is a new comment.
 func (s *Service) CommentIssue(ctx context.Context, key, actor, body string) error {
+	if err := s.callerCanAccessIssue(ctx, key); err != nil {
+		return err
+	}
 	if strings.TrimSpace(body) == "" {
 		return fmt.Errorf("CommentIssue: empty body")
 	}

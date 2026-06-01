@@ -181,6 +181,10 @@ func (s *Service) GetIssue(ctx context.Context, key string) (*Issue, error) {
 // state machine + DoD gate. The actor is recorded for the timeline
 // (events table; written by callers in Phase 2 — for now status-only).
 func (s *Service) TransitionIssue(ctx context.Context, key, toStatus, actor string) error {
+	if err := s.callerCanAccessIssue(ctx, key); err != nil {
+		return err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
