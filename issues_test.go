@@ -60,5 +60,8 @@ func newTestService(t *testing.T) *Service {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// Close the DB before t.TempDir's RemoveAll runs (cleanups are LIFO), so the
+	// SQLite file isn't held open — Windows can't unlink an open file.
+	t.Cleanup(func() { _ = svc.Close() })
 	return svc
 }
