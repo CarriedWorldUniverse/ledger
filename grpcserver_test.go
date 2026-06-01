@@ -287,6 +287,81 @@ func TestGRPC_GetIssue_CrossOrg_NotFound(t *testing.T) {
 	}
 }
 
+func TestGRPC_ListComments_CrossOrg_NotFound(t *testing.T) {
+	// ListComments calls Timeline internally. A cross-org caller who
+	// knows an issue key must get NotFound (hide-existence), not the
+	// comment bodies.
+	clients, svc := newTestGRPCServer(t)
+	setupTestOrg(t, svc, "acme", "PROJ")
+
+	writeCtx := mdOutCtx("acme", "agent:test", "issue:write")
+	createResp, err := clients.issue.CreateIssue(writeCtx, &cwbv1.CreateIssueRequest{
+		Project:          "PROJ",
+		Type:             "Story",
+		Summary:          "secret issue",
+		DefinitionOfDone: "- [ ] something",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+	key := createResp.Issue.Key
+
+	// Add a comment to make the timeline non-empty.
+	if _, err := clients.issue.CommentIssue(writeCtx, &cwbv1.CommentIssueRequest{
+		Key: key, Body: "sensitive comment",
+	}); err != nil {
+		t.Fatalf("CommentIssue: %v", err)
+	}
+
+	// Setup cross-org attacker.
+	if _, err := svc.CreateOrganisation(context.Background(), "evil", "Evil Inc"); err != nil {
+		t.Fatalf("CreateOrganisation evil: %v", err)
+	}
+	if _, err := svc.CreateUser(context.Background(), "agent:evil", "ai"); err != nil {
+		t.Fatalf("CreateUser evil: %v", err)
+	}
+
+	// Cross-org caller must get NotFound, not the comment list.
+	crossCtx := mdOutCtx("evil", "agent:evil", "issue:read")
+	_, err = clients.issue.ListComments(crossCtx, &cwbv1.ListCommentsRequest{Key: key})
+	if grpcCode(err) != codes.NotFound {
+		t.Errorf("cross-org ListComments: code=%v, want NotFound", grpcCode(err))
+	}
+}
+
+func TestGRPC_ListComments_SameOrg_Allowed(t *testing.T) {
+	// Same-org caller can read comments — confirms the gate doesn't
+	// over-block the happy path.
+	clients, svc := newTestGRPCServer(t)
+	setupTestOrg(t, svc, "acme", "PROJ")
+
+	writeCtx := mdOutCtx("acme", "agent:test", "issue:write")
+	createResp, err := clients.issue.CreateIssue(writeCtx, &cwbv1.CreateIssueRequest{
+		Project:          "PROJ",
+		Type:             "Story",
+		Summary:          "with comments",
+		DefinitionOfDone: "- [ ] something",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+	key := createResp.Issue.Key
+	if _, err := clients.issue.CommentIssue(writeCtx, &cwbv1.CommentIssueRequest{
+		Key: key, Body: "hello",
+	}); err != nil {
+		t.Fatalf("CommentIssue: %v", err)
+	}
+
+	readCtx := mdOutCtx("acme", "agent:test", "issue:read")
+	resp, err := clients.issue.ListComments(readCtx, &cwbv1.ListCommentsRequest{Key: key})
+	if err != nil {
+		t.Errorf("in-org ListComments: %v", err)
+	}
+	if len(resp.GetComments()) != 1 {
+		t.Errorf("in-org ListComments: got %d comments, want 1", len(resp.GetComments()))
+	}
+}
+
 // ---------- PurgeOrg ----------
 
 func TestGRPC_PurgeOrg_CascadeAndIdempotent(t *testing.T) {

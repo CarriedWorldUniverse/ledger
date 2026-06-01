@@ -178,7 +178,11 @@ func (s *issueServer) ListComments(ctx context.Context, r *cwbv1.ListCommentsReq
 	if !hasScope(scopes, "issue:read") {
 		return nil, status.Error(codes.PermissionDenied, "missing scope issue:read")
 	}
-	events, err := s.svc.Timeline(ContextWithAuth(ctx, claims), r.Key)
+	authCtx := ContextWithAuth(ctx, claims)
+	if err := s.svc.callerCanAccessIssue(authCtx, r.Key); err != nil {
+		return nil, toStatus(err)
+	}
+	events, err := s.svc.Timeline(authCtx, r.Key)
 	if err != nil {
 		return nil, toStatus(err)
 	}
