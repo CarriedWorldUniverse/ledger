@@ -4,7 +4,7 @@
 
 Built to replace Jira as the canonical tracker for everything nexus hosts — nexus itself, agora, interchange, casket, bridle, cairn, vessel, the OSS stack, and the projects cairn-as-repo-host serves.
 
-**Status:** scaffold. Design landed 2026-05-17 (spec + foundation plan in `docs/`). Phase 0 implementation pending against [`docs/plan-foundation.md`](./docs/plan-foundation.md).
+**Status:** implemented and under active development. The foundation phases from [`docs/plan-foundation.md`](./docs/plan-foundation.md) are in place — schema runner, materialised-view store, append-only event timeline, immutable comments, watchers, per-issue-type workflow + Definition-of-Done validator, search, links, cross-project moves, multi-tenancy/org scoping, and chat notifications — backed by an extensive test suite. The service ships as a standalone gRPC binary (`cmd/ledger`) behind interchange-gateway over mTLS, with a Containerfile and k3s deployment manifests under `deploy/k3s/`.
 
 ---
 
@@ -173,15 +173,15 @@ The full ledger feature set spans multiple sibling epics in the NEX-137 family:
 
 ## Build
 
-Requires Go 1.25+.
+Requires Go 1.26+.
 
 ```sh
-make build   # vet + build all packages
+make build   # go build ./...
 make test    # race-enabled tests
 make vet     # go vet ./...
 ```
 
-This module has no standalone binary yet — Phase 0 is scaffold + tests. The MCP binary (`nexus-ledger-mcp`) and the in-process wiring live in the [`nexus`](https://github.com/CarriedWorldUniverse/nexus) repo and import this module via `go.mod`.
+The standalone gRPC service binary lives at `cmd/ledger` (built via `go build ./...`); `cmd/ledger/Containerfile` and the manifests under `deploy/k3s/` package it for deployment. The module can also be imported directly by [`nexus`](https://github.com/CarriedWorldUniverse/nexus) via `go.mod` for in-process use.
 
 ---
 
