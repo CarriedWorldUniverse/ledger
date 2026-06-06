@@ -36,6 +36,7 @@ func newTestServiceWithNotifier(t *testing.T, n Notifier) *Service {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = svc.Close() }) // close DB before TempDir cleanup (Windows can't unlink open files)
 	return svc
 }
 

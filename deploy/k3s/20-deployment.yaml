@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger
+  namespace: cwb
+  labels:
+    app: ledger
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ledger
+  template:
+    metadata:
+      labels:
+        app: ledger
+    spec:
+      containers:
+        - name: ledger
+          image: localhost/ledger:dev
+          imagePullPolicy: Never
+          ports:
+            - name: grpc  # gRPC server; was HTTP pre-Phase-2
+              containerPort: 8081
+          env:
+            - name: LEDGER_GRPC_ADDR
+              value: ":8081"
+            - name: LEDGER_DB
+              value: "/var/lib/nexus/ledger.db"
+            - name: LEDGER_TLS_CERT
+              value: "/etc/cwb/tls/tls.crt"
+            - name: LEDGER_TLS_KEY
+              value: "/etc/cwb/tls/tls.key"
+            - name: LEDGER_TLS_CA
+              value: "/etc/cwb/tls/ca.crt"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/nexus
+            - name: tls
+              mountPath: /etc/cwb/tls
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ledger-data
+        - name: tls
+          secret:
+            secretName: ledger-tls

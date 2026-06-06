@@ -237,3 +237,117 @@ func TestAuthFromContext_NilSafe(t *testing.T) {
 		t.Errorf("AuthFromContext(empty ctx) = %+v, want nil", c)
 	}
 }
+
+// ---------- cross-org gate on transition / comment / watch / timeline ----------
+
+func TestTransitionIssue_RejectsCrossOrgCaller(t *testing.T) {
+	// Nexus-org caller tries to transition an acme issue — must get
+	// ErrIssueNotFound (hide-existence), not a permissions error.
+	svc, _, _, _, acmeIssue := seedMultiOrgFixture(t)
+	nexusCtx := withClaims(context.Background(), "shadow", "nexus", "member")
+
+	err := svc.TransitionIssue(nexusCtx, acmeIssue, "In Progress", "shadow")
+	if !errors.Is(err, ErrIssueNotFound) {
+		t.Errorf("cross-org TransitionIssue: got %v, want ErrIssueNotFound", err)
+	}
+}
+
+func TestTransitionIssue_AllowsSameOrgCaller(t *testing.T) {
+	// Same-org caller can transition their own issue.
+	svc, _, _, nexusIssue, _ := seedMultiOrgFixture(t)
+	nexusCtx := withClaims(context.Background(), "shadow", "nexus", "member")
+
+	// Issue starts in "To Do"; transition to "In Progress" (valid path).
+	if err := svc.TransitionIssue(nexusCtx, nexusIssue, "In Progress", "shadow"); err != nil {
+		t.Errorf("in-org TransitionIssue: %v", err)
+	}
+}
+
+func TestCommentIssue_RejectsCrossOrgCaller(t *testing.T) {
+	// Nexus-org caller tries to comment on an acme issue — must get
+	// ErrIssueNotFound (hide-existence).
+	svc, _, _, _, acmeIssue := seedMultiOrgFixture(t)
+	nexusCtx := withClaims(context.Background(), "shadow", "nexus", "member")
+
+	err := svc.CommentIssue(nexusCtx, acmeIssue, "shadow", "sneaky comment")
+	if !errors.Is(err, ErrIssueNotFound) {
+		t.Errorf("cross-org CommentIssue: got %v, want ErrIssueNotFound", err)
+	}
+}
+
+func TestCommentIssue_AllowsSameOrgCaller(t *testing.T) {
+	// Same-org caller can comment on their own issue.
+	svc, _, _, nexusIssue, _ := seedMultiOrgFixture(t)
+	nexusCtx := withClaims(context.Background(), "shadow", "nexus", "member")
+
+	if err := svc.CommentIssue(nexusCtx, nexusIssue, "shadow", "great progress"); err != nil {
+		t.Errorf("in-org CommentIssue: %v", err)
+	}
+}
+
+func TestWatchIssue_RejectsCrossOrgCaller(t *testing.T) {
+	// Nexus-org caller tries to watch an acme issue — must get
+	// ErrIssueNotFound (hide-existence).
+	svc, _, _, _, acmeIssue := seedMultiOrgFixture(t)
+	nexusCtx := withClaims(context.Background(), "shadow", "nexus", "member")
+
+	err := svc.WatchIssue(nexusCtx, acmeIssue, "shadow", "shadow")
+	if !errors.Is(err, ErrIssueNotFound) {
+		t.Errorf("cross-org WatchIssue: got %v, want ErrIssueNotFound", err)
+	}
+}
+
+func TestWatchIssue_AllowsSameOrgCaller(t *testing.T) {
+	// Same-org caller can watch their own issue.
+	svc, _, _, nexusIssue, _ := seedMultiOrgFixture(t)
+	nexusCtx := withClaims(context.Background(), "shadow", "nexus", "member")
+
+	if err := svc.WatchIssue(nexusCtx, nexusIssue, "shadow", "shadow"); err != nil {
+		t.Errorf("in-org WatchIssue: %v", err)
+	}
+}
+
+func TestUnwatchIssue_RejectsCrossOrgCaller(t *testing.T) {
+	// Nexus-org caller tries to unwatch an acme issue — must get
+	// ErrIssueNotFound (hide-existence).
+	svc, _, _, _, acmeIssue := seedMultiOrgFixture(t)
+	nexusCtx := withClaims(context.Background(), "shadow", "nexus", "member")
+
+	err := svc.UnwatchIssue(nexusCtx, acmeIssue, "shadow", "shadow")
+	if !errors.Is(err, ErrIssueNotFound) {
+		t.Errorf("cross-org UnwatchIssue: got %v, want ErrIssueNotFound", err)
+	}
+}
+
+func TestUnwatchIssue_AllowsSameOrgCaller(t *testing.T) {
+	// Same-org caller can unwatch their own issue.
+	svc, _, _, nexusIssue, _ := seedMultiOrgFixture(t)
+	nexusCtx := withClaims(context.Background(), "shadow", "nexus", "member")
+
+	if err := svc.UnwatchIssue(nexusCtx, nexusIssue, "shadow", "shadow"); err != nil {
+		t.Errorf("in-org UnwatchIssue: %v", err)
+	}
+}
+
+func TestWatchers_RejectsCrossOrgCaller(t *testing.T) {
+	// Nexus-org caller reading watchers of an acme issue must get
+	// ErrIssueNotFound (hide-existence). Watchers is a read path so
+	// it also leaks cross-org data if ungated.
+	svc, _, _, _, acmeIssue := seedMultiOrgFixture(t)
+	nexusCtx := withClaims(context.Background(), "shadow", "nexus", "member")
+
+	_, err := svc.Watchers(nexusCtx, acmeIssue)
+	if !errors.Is(err, ErrIssueNotFound) {
+		t.Errorf("cross-org Watchers: got %v, want ErrIssueNotFound", err)
+	}
+}
+
+func TestWatchers_AllowsSameOrgCaller(t *testing.T) {
+	// Same-org caller can read watchers of their own issue.
+	svc, _, _, nexusIssue, _ := seedMultiOrgFixture(t)
+	nexusCtx := withClaims(context.Background(), "shadow", "nexus", "member")
+
+	if _, err := svc.Watchers(nexusCtx, nexusIssue); err != nil {
+		t.Errorf("in-org Watchers: %v", err)
+	}
+}

@@ -5,6 +5,71 @@ import (
 	"testing"
 )
 
+// TestPurgeOrganisation_CascadesAndIdempotent verifies that PurgeOrganisation
+// deletes an org and all dependent projects/issues, and is a no-op (nil error)
+// for an absent slug (NEX-402).
+func TestPurgeOrganisation_CascadesAndIdempotent(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+
+	// Create a fresh org, project, and issue under it.
+	if _, err := svc.CreateOrganisation(ctx, "purgeme", "Purge Me"); err != nil {
+		t.Fatalf("CreateOrganisation: %v", err)
+	}
+	if err := svc.CreateProject(ctx, Project{Key: "PGX", Name: "Purge Project", Organisation: "purgeme"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	issue, err := svc.CreateIssue(ctx, IssueDraft{
+		Project:          "PGX",
+		Type:             "Story",
+		Summary:          "purge me too",
+		DefinitionOfDone: "- [ ] done",
+		Reporter:         "shadow",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+
+	// Sanity: confirm org, project, issue exist.
+	if _, err := svc.GetOrganisation(ctx, "purgeme"); err != nil {
+		t.Fatalf("org not found before purge: %v", err)
+	}
+	if _, err := svc.GetIssue(ctx, issue.Key); err != nil {
+		t.Fatalf("issue not found before purge: %v", err)
+	}
+
+	// Purge.
+	if err := svc.PurgeOrganisation(ctx, "purgeme"); err != nil {
+		t.Fatalf("PurgeOrganisation: %v", err)
+	}
+
+	// Org must be gone.
+	if _, err := svc.GetOrganisation(ctx, "purgeme"); err == nil {
+		t.Error("org still exists after purge")
+	}
+
+	// Project must be gone.
+	if p, err := svc.GetProject(ctx, "PGX"); err == nil {
+		t.Errorf("project still exists after purge: %+v", p)
+	}
+
+	// Issue must be gone.
+	if i, err := svc.GetIssue(ctx, issue.Key); err == nil {
+		t.Errorf("issue still exists after purge: %+v", i)
+	}
+
+	// Idempotent: calling again on absent org must return nil.
+	if err := svc.PurgeOrganisation(ctx, "purgeme"); err != nil {
+		t.Errorf("PurgeOrganisation (absent) = %v, want nil", err)
+	}
+
+	// Idempotent: calling on a slug that never existed must return nil.
+	if err := svc.PurgeOrganisation(ctx, "never-existed"); err != nil {
+		t.Errorf("PurgeOrganisation (never existed) = %v, want nil", err)
+	}
+}
+
 func TestSchemaV7_OrganisationsAndUsersExist(t *testing.T) {
 	svc := newTestService(t)
 	defer svc.Close()
