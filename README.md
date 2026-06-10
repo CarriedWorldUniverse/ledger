@@ -10,31 +10,28 @@ Built to replace Jira as the canonical tracker for everything nexus hosts — ne
 
 ## Where ledger fits
 
-`ledger` is a Go module imported by [`nexus`](https://github.com/CarriedWorldUniverse/nexus) and run in-process under the nexus supervisor. The DB (`ledger.db`) lives in the nexus data directory parallel to `broker.db`, with its own WAL / locks / backup cadence. Consumers (cairn-as-repo-host, the future contributor-facing UI, aspect MCPs) reach ledger via its REST surface.
+`ledger` is a **standalone CWB service** (`cmd/ledger`), deployed as its own pod on the k3s cluster. It speaks **gRPC only, over mTLS**, behind [interchange](https://github.com/CarriedWorldUniverse/interchange) (the CWB gateway). Identity is **not** established by ledger: the gateway runs herald verification and injects `cwb-*` gRPC metadata (subject / org / kind / scopes), which ledger trusts because the gateway↔ledger hop is mTLS. The SQLite DB (`/var/lib/cwb/ledger.db`) is the service's own, with its own WAL and backup cadence. (The module can still be imported in-process by nexus via `go.mod`, but the deployed shape is the standalone pod.)
+
+The gRPC surface is four services registered in `cmd/ledger/main.go`:
+
+| Service | Covers |
+|---|---|
+| `IssueService` | create / get / update / transition / assign / claim / comment / link / watch / search / list |
+| `ProjectService` | create / list / update / archive projects |
+| `OrgService` | org-scoped administration; self-org purge |
+| `AdminService` | platform/org administration |
 
 ```
-┌─────────────────────────────── nexus.exe ───────────────────────────────┐
-│                                                                           │
-│   ┌─────────┐    ┌─────────┐    ┌────────────────┐    ┌──────────────┐   │
-│   │ broker  │    │  frame  │    │     ledger     │    │   identity   │   │
-│   │ chat +  │    │  keel + │    │  (this repo)   │    │  keyfile +   │   │
-│   │ events  │    │ funnel  │    │  issues.db ────┼──► │  signing     │   │
-│   └────┬────┘    └────┬────┘    └────────┬───────┘    └──────────────┘   │
-│        │              │                  │                                 │
-│        │              │   /api/ledger/*  │                                 │
-│        │              └──────────────────┤   notifies via broker.HandleChatSend
-│        │                                 │                                 │
-│        └─────────────────────────────────┘                                 │
-└───────────────────────────────────────────────────────────────────────────┘
-                          ▲                                  ▲
-              MCP (stdio) │                                  │ REST + tracker-WS
-          ┌───────────────┴──────┐                  ┌────────┴───────┐
-          │  nexus-ledger-mcp    │                  │  cairn (host)  │
-          │  per-aspect process  │                  │  PR/push wire  │
-          └──────────────────────┘                  └────────────────┘
+  aspect ──gRPC (cwb-* metadata)──► interchange (CWB gateway, mTLS + herald verify)
+                                          │  injects cwb-{subject,org,kind,scopes}
+                                          ▼
+                                   ledger  (cmd/ledger, gRPC-only over mTLS)
+                                          │
+                                          ▼
+                                   /var/lib/cwb/ledger.db  (SQLite + FTS5)
 ```
 
-Sibling repos: [`nexus`](https://github.com/CarriedWorldUniverse/nexus) · [`interchange`](https://github.com/CarriedWorldUniverse/interchange) · [`agora`](https://github.com/CarriedWorldUniverse/agora) · [`bridle`](https://github.com/CarriedWorldUniverse/bridle) · [`casket-go`](https://github.com/CarriedWorldUniverse/casket-go) · [`cairn`](https://github.com/CarriedWorldUniverse/cairn).
+Sibling repos: [`herald`](https://github.com/CarriedWorldUniverse/herald) · [`cairn`](https://github.com/CarriedWorldUniverse/cairn) · [`commonplace`](https://github.com/CarriedWorldUniverse/commonplace) · [`interchange`](https://github.com/CarriedWorldUniverse/interchange) · [`casket`](https://github.com/CarriedWorldUniverse/casket) · [`nexus`](https://github.com/CarriedWorldUniverse/nexus).
 
 ---
 
@@ -121,19 +118,21 @@ Native `nexus snapshot` command produces a coherent tarball — brief write-paus
 
 | Component | Where |
 |---|---|
-| `ledger` service (this module) | In-process inside `nexus.exe`, under the broker's supervisor |
-| `ledger.db` SQLite | Nexus data dir, parallel to `broker.db` |
-| `nexus-ledger-mcp` | One process per aspect; stdio MCP; HTTPS client to nexus.exe's `/api/ledger/*` |
-| REST API | Served from `nexus.exe`'s existing HTTPS listener |
-| Notifications | Through `broker.HandleChatSend` (canonical chat path) |
+| `ledger` service (`cmd/ledger`) | Standalone pod on the k3s cluster |
+| `ledger.db` SQLite (+ FTS5) | Service-local volume at `/var/lib/cwb/ledger.db` |
+| gRPC API (Issue / Project / Org / Admin) | gRPC-only, served by `cmd/ledger` over mTLS |
+| Identity | `cwb-*` gRPC metadata injected by `interchange` after herald verification |
+| Edge / auth | `interchange` (the CWB gateway) fronts ledger; clients reach it through there |
+| Atomic claim | Single-call `ClaimIssue` (`claim.go`) — replaces the old assign-then-read race |
+| Full-text search | FTS5 over issue bodies + comment bodies (`search.go`) |
 | Contributor-facing web UI | Future, separate (NEX-164) |
 | External-event ingress | Through `interchange` (NEX-140 + NEX-163) |
 
 ---
 
-## MCP surface
+## Agent verbs
 
-Tool names finalised at implementation start (currently spec'd as `issue.*`, rename pass to `ledger.*` before Phase 0 lands):
+The gRPC `IssueService` / `ProjectService` back these aspect-facing verbs (surfaced to aspects through an MCP client; shown in the `ledger.*` form):
 
 | Tool | Purpose |
 |---|---|
@@ -187,15 +186,7 @@ The standalone gRPC service binary lives at `cmd/ledger` (built via `go build ./
 
 ## Implementation plan
 
-[`docs/plan-foundation.md`](./docs/plan-foundation.md) — Phases 0-2, 22 bite-sized TDD tasks. Subsequent phases (external sync, attachments, dashboard, Jira cutover, deprecate `nexus-jira-mcp`) get their own plans once NEX-139 / NEX-140 / NEX-163 ship.
-
-Per-phase exit gates:
-
-| Phase | What ships | Exit |
-|---|---|---|
-| 0 | Bootstrap, schema runner, healthz | DB boots, supervisor knows the service |
-| 1 | MV store + REST + MCP scaffold + dual-write Jira shim | Aspect round-trips an issue end-to-end; Jira still authoritative |
-| 2 | Events + comments + watchers + materialised markdown + chat notifications | Full activity flowing; chat pings deliver |
+The original foundation plan ([`docs/plan-foundation.md`](./docs/plan-foundation.md)) sequenced the store / events / comments / watchers work as in-process Phases 0-2. That core is built, and the service has since been lifted to the standalone gRPC pod described above (issues, projects, teams, links, search, atomic claim, org tenancy). Remaining future work — external sync, attachments, dashboard, Jira cutover — is sequenced against NEX-139 / NEX-140 / NEX-163.
 
 ---
 
