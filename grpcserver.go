@@ -75,6 +75,14 @@ func toProtoIssue(i *Issue) *cwbv1.Issue {
 	}
 }
 
+func toProtoIssueWithCategory(i *Issue, category cwbv1.StatusCategory) *cwbv1.Issue {
+	out := toProtoIssue(i)
+	if out != nil {
+		out.Category = category
+	}
+	return out
+}
+
 // toProtoIssueRef converts an internal IssueRef to the proto wire type.
 func toProtoIssueRef(r IssueRef) *cwbv1.IssueRef {
 	return &cwbv1.IssueRef{
@@ -90,13 +98,19 @@ func toProtoIssueRef(r IssueRef) *cwbv1.IssueRef {
 	}
 }
 
-// toProtoIssueRefs converts a slice of IssueRef.
-func toProtoIssueRefs(refs []IssueRef) []*cwbv1.IssueRef {
-	out := make([]*cwbv1.IssueRef, len(refs))
-	for i, r := range refs {
-		out[i] = toProtoIssueRef(r)
-	}
+func toProtoIssueRefWithCategory(r IssueRef, category cwbv1.StatusCategory) *cwbv1.IssueRef {
+	out := toProtoIssueRef(r)
+	out.Category = category
 	return out
+}
+
+func statusCategoryForWorkflow(wf *cwbv1.Workflow, status string) cwbv1.StatusCategory {
+	for _, st := range wf.GetStates() {
+		if st.GetName() == status {
+			return st.GetCategory()
+		}
+	}
+	return cwbv1.StatusCategory_STATUS_CATEGORY_UNSPECIFIED
 }
 
 // toProtoExternalRefs converts a slice of ExternalRef.

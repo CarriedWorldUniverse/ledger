@@ -22,6 +22,35 @@ func NewIssueServer(svc *Service) *issueServer {
 	return &issueServer{svc: svc}
 }
 
+func (s *issueServer) toProtoIssue(ctx context.Context, iss *Issue) (*cwbv1.Issue, error) {
+	if iss == nil {
+		return nil, nil
+	}
+	wf, err := s.svc.workflowForProject(ctx, iss.Project)
+	if err != nil {
+		return nil, err
+	}
+	return toProtoIssueWithCategory(iss, statusCategoryForWorkflow(wf, iss.Status)), nil
+}
+
+func (s *issueServer) toProtoIssueRefs(ctx context.Context, refs []IssueRef) ([]*cwbv1.IssueRef, error) {
+	out := make([]*cwbv1.IssueRef, len(refs))
+	workflows := make(map[string]*cwbv1.Workflow)
+	for i, r := range refs {
+		wf, ok := workflows[r.Project]
+		if !ok {
+			var err error
+			wf, err = s.svc.workflowForProject(ctx, r.Project)
+			if err != nil {
+				return nil, err
+			}
+			workflows[r.Project] = wf
+		}
+		out[i] = toProtoIssueRefWithCategory(r, statusCategoryForWorkflow(wf, r.Status))
+	}
+	return out, nil
+}
+
 func (s *issueServer) CreateIssue(ctx context.Context, r *cwbv1.CreateIssueRequest) (*cwbv1.CreateIssueResponse, error) {
 	claims, scopes, ok := identityFromMD(ctx)
 	if !ok {
@@ -53,7 +82,11 @@ func (s *issueServer) CreateIssue(ctx context.Context, r *cwbv1.CreateIssueReque
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return &cwbv1.CreateIssueResponse{Issue: toProtoIssue(iss)}, nil
+	out, err := s.toProtoIssue(ctx, iss)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &cwbv1.CreateIssueResponse{Issue: out}, nil
 }
 
 func (s *issueServer) GetIssue(ctx context.Context, r *cwbv1.GetIssueRequest) (*cwbv1.GetIssueResponse, error) {
@@ -68,7 +101,11 @@ func (s *issueServer) GetIssue(ctx context.Context, r *cwbv1.GetIssueRequest) (*
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return &cwbv1.GetIssueResponse{Issue: toProtoIssue(iss)}, nil
+	out, err := s.toProtoIssue(ctx, iss)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &cwbv1.GetIssueResponse{Issue: out}, nil
 }
 
 func (s *issueServer) UpdateIssue(ctx context.Context, r *cwbv1.UpdateIssueRequest) (*cwbv1.UpdateIssueResponse, error) {
@@ -245,7 +282,11 @@ func (s *issueServer) ClaimIssue(ctx context.Context, r *cwbv1.ClaimIssueRequest
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return &cwbv1.ClaimIssueResponse{Issue: toProtoIssue(iss)}, nil
+	out, err := s.toProtoIssue(ctx, iss)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &cwbv1.ClaimIssueResponse{Issue: out}, nil
 }
 
 func (s *issueServer) AddWatcher(ctx context.Context, r *cwbv1.AddWatcherRequest) (*cwbv1.AddWatcherResponse, error) {
@@ -370,7 +411,11 @@ func (s *issueServer) ListMyIssues(ctx context.Context, r *cwbv1.ListMyIssuesReq
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return &cwbv1.ListMyIssuesResponse{Issues: toProtoIssueRefs(refs)}, nil
+	out, err := s.toProtoIssueRefs(ctx, refs)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &cwbv1.ListMyIssuesResponse{Issues: out}, nil
 }
 
 func (s *issueServer) ListReadyIssues(ctx context.Context, r *cwbv1.ListReadyIssuesRequest) (*cwbv1.ListReadyIssuesResponse, error) {
@@ -389,7 +434,11 @@ func (s *issueServer) ListReadyIssues(ctx context.Context, r *cwbv1.ListReadyIss
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return &cwbv1.ListReadyIssuesResponse{Issues: toProtoIssueRefs(refs)}, nil
+	out, err := s.toProtoIssueRefs(ctx, refs)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &cwbv1.ListReadyIssuesResponse{Issues: out}, nil
 }
 
 func (s *issueServer) SearchIssues(ctx context.Context, r *cwbv1.SearchIssuesRequest) (*cwbv1.SearchIssuesResponse, error) {
@@ -420,7 +469,11 @@ func (s *issueServer) SearchIssues(ctx context.Context, r *cwbv1.SearchIssuesReq
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return &cwbv1.SearchIssuesResponse{Refs: toProtoIssueRefs(refs)}, nil
+	out, err := s.toProtoIssueRefs(ctx, refs)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &cwbv1.SearchIssuesResponse{Refs: out}, nil
 }
 
 func (s *issueServer) SearchIssuesText(ctx context.Context, r *cwbv1.SearchIssuesTextRequest) (*cwbv1.SearchIssuesTextResponse, error) {
@@ -438,7 +491,11 @@ func (s *issueServer) SearchIssuesText(ctx context.Context, r *cwbv1.SearchIssue
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return &cwbv1.SearchIssuesTextResponse{Refs: toProtoIssueRefs(refs)}, nil
+	out, err := s.toProtoIssueRefs(ctx, refs)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &cwbv1.SearchIssuesTextResponse{Refs: out}, nil
 }
 
 func (s *issueServer) ListUpdates(ctx context.Context, r *cwbv1.ListUpdatesRequest) (*cwbv1.ListUpdatesResponse, error) {

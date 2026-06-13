@@ -139,6 +139,9 @@ func TestGRPC_CreateClaimTransition_Lifecycle(t *testing.T) {
 	if createResp.Issue.Status != "To Do" {
 		t.Errorf("status = %q, want To Do", createResp.Issue.Status)
 	}
+	if createResp.Issue.GetCategory() != cwbv1.StatusCategory_STATUS_CATEGORY_DRAFT {
+		t.Errorf("create category = %v, want DRAFT", createResp.Issue.GetCategory())
+	}
 
 	// 2. ClaimIssue → should transition to In Progress
 	claimResp, err := clients.issue.ClaimIssue(claimCtx, &cwbv1.ClaimIssueRequest{Key: key})
@@ -147,6 +150,9 @@ func TestGRPC_CreateClaimTransition_Lifecycle(t *testing.T) {
 	}
 	if claimResp.Issue.Status != "In Progress" {
 		t.Errorf("after claim: status = %q, want In Progress", claimResp.Issue.Status)
+	}
+	if claimResp.Issue.GetCategory() != cwbv1.StatusCategory_STATUS_CATEGORY_ACTIVE {
+		t.Errorf("claim category = %v, want ACTIVE", claimResp.Issue.GetCategory())
 	}
 
 	// 3. TransitionIssue → In Review
@@ -175,6 +181,9 @@ func TestGRPC_CreateClaimTransition_Lifecycle(t *testing.T) {
 	}
 	if getResp.Issue.Status != "Done" {
 		t.Errorf("final status = %q, want Done", getResp.Issue.Status)
+	}
+	if getResp.Issue.GetCategory() != cwbv1.StatusCategory_STATUS_CATEGORY_DONE {
+		t.Errorf("final category = %v, want DONE", getResp.Issue.GetCategory())
 	}
 }
 
@@ -256,6 +265,129 @@ func TestGRPC_ProjectWorkflow_DefaultFallback(t *testing.T) {
 	}
 	if !proto.Equal(resp.Workflow, defaultWorkflow()) {
 		t.Fatal("GetProjectWorkflow fallback did not return default workflow")
+	}
+}
+
+func TestGRPC_GetIssue_PopulatesStatusCategory(t *testing.T) {
+	clients, svc := newTestGRPCServer(t)
+	setupTestOrg(t, svc, "acme", "PROJ")
+
+	writeCtx := mdOutCtx("acme", "agent:test", "issue:write")
+	readCtx := mdOutCtx("acme", "agent:test", "issue:read")
+	createResp, err := clients.issue.CreateIssue(writeCtx, &cwbv1.CreateIssueRequest{
+		Project:          "PROJ",
+		Type:             "Story",
+		Summary:          "category",
+		DefinitionOfDone: "- [ ] something",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+
+	getResp, err := clients.issue.GetIssue(readCtx, &cwbv1.GetIssueRequest{Key: createResp.Issue.Key})
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if getResp.Issue.GetCategory() != cwbv1.StatusCategory_STATUS_CATEGORY_DRAFT {
+		t.Fatalf("GetIssue category = %v, want DRAFT", getResp.Issue.GetCategory())
+	}
+}
+
+func TestGRPC_SearchIssues_PopulatesStatusCategoryAcrossProjects(t *testing.T) {
+	clients, svc := newTestGRPCServer(t)
+	setupTestOrg(t, svc, "acme", "PROJ")
+	if err := svc.CreateProject(
+		ContextWithAuth(context.Background(), &AuthClaims{Sub: "agent:test", Org: "acme"}),
+		Project{Key: "CUST", Name: "custom project", Organisation: "acme"},
+	); err != nil {
+		t.Fatalf("CreateProject CUST: %v", err)
+	}
+
+	writeCtx := mdOutCtx("acme", "agent:test", "issue:write")
+	readCtx := mdOutCtx("acme", "agent:test", "issue:read")
+	customWorkflow := &cwbv1.Workflow{
+		States: []*cwbv1.WorkflowState{
+			{Name: "To Do", Category: cwbv1.StatusCategory_STATUS_CATEGORY_READY},
+			{Name: "In Progress", Category: cwbv1.StatusCategory_STATUS_CATEGORY_ACTIVE},
+		},
+		Transitions: []*cwbv1.WorkflowTransition{
+			{From: "To Do", To: []string{"In Progress"}},
+			{From: "In Progress", To: []string{}},
+		},
+	}
+	if _, err := clients.issue.SetProjectWorkflow(writeCtx, &cwbv1.SetProjectWorkflowRequest{
+		Project:  "CUST",
+		Workflow: customWorkflow,
+	}); err != nil {
+		t.Fatalf("SetProjectWorkflow: %v", err)
+	}
+
+	defaultResp, err := clients.issue.CreateIssue(writeCtx, &cwbv1.CreateIssueRequest{
+		Project:          "PROJ",
+		Type:             "Story",
+		Summary:          "default category",
+		DefinitionOfDone: "- [ ] something",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue default: %v", err)
+	}
+	customResp, err := clients.issue.CreateIssue(writeCtx, &cwbv1.CreateIssueRequest{
+		Project:          "CUST",
+		Type:             "Story",
+		Summary:          "custom category",
+		DefinitionOfDone: "- [ ] something",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue custom: %v", err)
+	}
+
+	searchResp, err := clients.issue.SearchIssues(readCtx, &cwbv1.SearchIssuesRequest{
+		Filter: &cwbv1.SearchFilter{Projects: []string{"PROJ", "CUST"}},
+	})
+	if err != nil {
+		t.Fatalf("SearchIssues: %v", err)
+	}
+	got := map[string]cwbv1.StatusCategory{}
+	for _, ref := range searchResp.GetRefs() {
+		got[ref.GetKey()] = ref.GetCategory()
+	}
+	if got[defaultResp.Issue.Key] != cwbv1.StatusCategory_STATUS_CATEGORY_DRAFT {
+		t.Fatalf("default issue category = %v, want DRAFT", got[defaultResp.Issue.Key])
+	}
+	if got[customResp.Issue.Key] != cwbv1.StatusCategory_STATUS_CATEGORY_READY {
+		t.Fatalf("custom issue category = %v, want READY", got[customResp.Issue.Key])
+	}
+}
+
+func TestGRPC_GetIssue_UnmappedStatusCategoryUnspecified(t *testing.T) {
+	clients, svc := newTestGRPCServer(t)
+	setupTestOrg(t, svc, "acme", "PROJ")
+
+	writeCtx := mdOutCtx("acme", "agent:test", "issue:write")
+	readCtx := mdOutCtx("acme", "agent:test", "issue:read")
+	createResp, err := clients.issue.CreateIssue(writeCtx, &cwbv1.CreateIssueRequest{
+		Project:          "PROJ",
+		Type:             "Story",
+		Summary:          "unknown category",
+		DefinitionOfDone: "- [ ] something",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+	if _, err := svc.db.ExecContext(context.Background(),
+		`UPDATE issues SET status = ? WHERE key = ?`,
+		"Unmapped",
+		createResp.Issue.Key,
+	); err != nil {
+		t.Fatalf("force unmapped status: %v", err)
+	}
+
+	getResp, err := clients.issue.GetIssue(readCtx, &cwbv1.GetIssueRequest{Key: createResp.Issue.Key})
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if getResp.Issue.GetCategory() != cwbv1.StatusCategory_STATUS_CATEGORY_UNSPECIFIED {
+		t.Fatalf("GetIssue category = %v, want UNSPECIFIED", getResp.Issue.GetCategory())
 	}
 }
 
