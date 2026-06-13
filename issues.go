@@ -40,6 +40,7 @@ type Issue struct {
 	Reporter         string
 	ParentKey        string // empty if no parent
 	ExternalRefs     []ExternalRef
+	Skills           []string // capability tags; empty if unset
 	CreatedAt        string
 	UpdatedAt        string
 }
@@ -57,6 +58,7 @@ type IssueDraft struct {
 	AssigneeAspect   string
 	AssigneeTeam     string
 	ExternalRefs     []ExternalRef
+	Skills           []string
 }
 
 // UpdatePatch holds optional field updates. Empty/nil fields = no change.
@@ -112,14 +114,18 @@ func (s *Service) CreateIssue(ctx context.Context, d IssueDraft) (*Issue, error)
 	if err != nil {
 		return nil, fmt.Errorf("encode external_refs: %w", err)
 	}
+	skillsJSON, err := encodeSkills(d.Skills)
+	if err != nil {
+		return nil, fmt.Errorf("encode skills: %w", err)
+	}
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO issues(key, project, seq, type, status, summary, description, definition_of_done,
-			priority, reporter, parent_key, assignee_aspect, assignee_team, external_refs)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			priority, reporter, parent_key, assignee_aspect, assignee_team, external_refs, skills)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		key, d.Project, seq, d.Type, defaultStatus, d.Summary, d.Description, d.DefinitionOfDone,
 		priority, d.Reporter, nullable(d.ParentKey), nullable(d.AssigneeAspect), nullable(d.AssigneeTeam),
-		externalRefsJSON,
+		externalRefsJSON, skillsJSON,
 	); err != nil {
 		return nil, fmt.Errorf("insert issue: %w", err)
 	}
@@ -436,15 +442,15 @@ func (s *Service) fetchIssueByKey(ctx context.Context, key string) (*Issue, erro
 	var i Issue
 	var assigneeAspect, assigneeTeam, parentKey sql.NullString
 	var priorityLocked int
-	var externalRefsJSON string
+	var externalRefsJSON, skillsJSON string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT key, project, seq, type, status, summary, description, definition_of_done,
 		       priority, priority_locked, assignee_aspect, assignee_team, reporter,
-		       parent_key, external_refs, created_at, updated_at
+		       parent_key, external_refs, skills, created_at, updated_at
 		FROM issues WHERE key = ?`, key,
 	).Scan(&i.Key, &i.Project, &i.Seq, &i.Type, &i.Status, &i.Summary, &i.Description,
 		&i.DefinitionOfDone, &i.Priority, &priorityLocked, &assigneeAspect, &assigneeTeam,
-		&i.Reporter, &parentKey, &externalRefsJSON, &i.CreatedAt, &i.UpdatedAt)
+		&i.Reporter, &parentKey, &externalRefsJSON, &skillsJSON, &i.CreatedAt, &i.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrIssueNotFound
 	}
@@ -464,6 +470,12 @@ func (s *Service) fetchIssueByKey(ctx context.Context, key string) (*Issue, erro
 		i.ExternalRefs = nil
 	} else {
 		i.ExternalRefs = refs
+	}
+	skills, sderr := decodeSkills(skillsJSON)
+	if sderr != nil {
+		i.Skills = nil
+	} else {
+		i.Skills = skills
 	}
 	return &i, nil
 }
@@ -496,6 +508,36 @@ func decodeExternalRefs(s string) ([]ExternalRef, error) {
 		return nil, nil
 	}
 	return refs, nil
+}
+
+// encodeSkills marshals the skill tags to the JSON text stored in the
+// skills column. nil / empty maps to "[]" so the NOT NULL DEFAULT '[]'
+// invariant holds (mirrors encodeExternalRefs).
+func encodeSkills(skills []string) (string, error) {
+	if len(skills) == 0 {
+		return "[]", nil
+	}
+	buf, err := json.Marshal(skills)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+// decodeSkills is the inverse — empty / "[]" both yield nil so "no skills"
+// is one canonical empty value at the Go layer.
+func decodeSkills(s string) ([]string, error) {
+	if s == "" || s == "[]" {
+		return nil, nil
+	}
+	var skills []string
+	if err := json.Unmarshal([]byte(s), &skills); err != nil {
+		return nil, err
+	}
+	if len(skills) == 0 {
+		return nil, nil
+	}
+	return skills, nil
 }
 
 func validateDraft(d IssueDraft) error {

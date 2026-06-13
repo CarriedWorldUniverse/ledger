@@ -70,6 +70,7 @@ func toProtoIssue(i *Issue) *cwbv1.Issue {
 		Reporter:         i.Reporter,
 		ParentKey:        i.ParentKey,
 		ExternalRefs:     toProtoExternalRefs(i.ExternalRefs),
+		Skills:           i.Skills,
 		CreatedAt:        i.CreatedAt,
 		UpdatedAt:        i.UpdatedAt,
 	}

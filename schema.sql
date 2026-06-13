@@ -369,3 +369,14 @@ CREATE TABLE IF NOT EXISTS workflows (
 );
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (13);
+
+-- -------------------------------------------------------------------
+-- Issue skills / capability tags (v14)
+-- -------------------------------------------------------------------
+-- Generic skill/capability tags on an issue (NEX-666). JSON text array,
+-- mirrors external_refs. Workers pull ready issues whose required skills
+-- they serve (ListReady skill filter). ALTER ADD COLUMN is idempotent via
+-- the tolerate-duplicate-column migration path (see schema.go).
+ALTER TABLE issues ADD COLUMN skills TEXT NOT NULL DEFAULT '[]';
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (14);

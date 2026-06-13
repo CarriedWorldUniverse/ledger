@@ -158,7 +158,7 @@ func (s *Service) ListMy(ctx context.Context, aspect string, teams []string) ([]
 // assigned to them (directly or via team) that are in a startable
 // state ("To Do" or "In Progress" continuing). Ordered by priority
 // then age.
-func (s *Service) ListReady(ctx context.Context, aspect string, teams []string) ([]IssueRef, error) {
+func (s *Service) ListReady(ctx context.Context, aspect string, teams []string, wantSkills []string) ([]IssueRef, error) {
 	clauses := []string{"assignee_aspect = ?"}
 	args := []any{aspect}
 	if len(teams) > 0 {
@@ -170,16 +170,30 @@ func (s *Service) ListReady(ctx context.Context, aspect string, teams []string) 
 		}
 	}
 
+	// Skill routing (NEX-666): a ready issue matches when every skill it
+	// requires is served by the worker (issue.skills ⊆ wantSkills). An issue
+	// with no required skills matches any worker (json_each yields no rows →
+	// NOT EXISTS is true). An empty wantSkills set disables the filter.
+	skillFilter := ""
+	if len(wantSkills) > 0 {
+		ph := strings.TrimRight(strings.Repeat("?,", len(wantSkills)), ",")
+		skillFilter = fmt.Sprintf(
+			" AND NOT EXISTS (SELECT 1 FROM json_each(issues.skills) WHERE value NOT IN (%s))", ph)
+		for _, sk := range wantSkills {
+			args = append(args, sk)
+		}
+	}
+
 	stmt := fmt.Sprintf(`
 			SELECT key, project, type, status, summary, priority,
 			       COALESCE(assignee_aspect, ''), COALESCE(assignee_team, ''), updated_at
 			FROM issues
-			WHERE (%s) AND status IN ('To Do', 'In Progress')
+			WHERE (%s) AND status IN ('To Do', 'In Progress')%s
 			ORDER BY
 			  CASE priority WHEN 'Highest' THEN 5 WHEN 'High' THEN 4 WHEN 'Medium' THEN 3 WHEN 'Low' THEN 2 ELSE 1 END DESC,
 			  created_at ASC
 			LIMIT 50`,
-		strings.Join(clauses, " OR "))
+		strings.Join(clauses, " OR "), skillFilter)
 
 	return s.runRefQuery(ctx, stmt, args)
 }
