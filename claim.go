@@ -49,6 +49,18 @@ func (s *Service) ClaimIssue(ctx context.Context, key, actor string) (*Issue, er
 	if err := s.callerCanAccessIssue(ctx, key); err != nil {
 		return nil, err
 	}
+	var project string
+	err := s.db.QueryRowContext(ctx, `SELECT project FROM issues WHERE key = ?`, key).Scan(&project)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrIssueNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("ClaimIssue: load project %s: %w", key, err)
+	}
+	wf, err := s.workflowForProject(ctx, project)
+	if err != nil {
+		return nil, fmt.Errorf("ClaimIssue: workflow %s: %w", project, err)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -56,11 +68,11 @@ func (s *Service) ClaimIssue(ctx context.Context, key, actor string) (*Issue, er
 	}
 	defer tx.Rollback()
 
-	var issueType, status, dod string
+	var status, dod string
 	var assignee sql.NullString
 	err = tx.QueryRowContext(ctx,
-		`SELECT type, status, definition_of_done, assignee_aspect FROM issues WHERE key = ?`, key,
-	).Scan(&issueType, &status, &dod, &assignee)
+		`SELECT status, definition_of_done, assignee_aspect FROM issues WHERE key = ?`, key,
+	).Scan(&status, &dod, &assignee)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrIssueNotFound
 	}
@@ -78,7 +90,7 @@ func (s *Service) ClaimIssue(ctx context.Context, key, actor string) (*Issue, er
 	// Determine whether a transition to "In Progress" is needed + legal.
 	needTransition := status != claimTargetStatus
 	if needTransition {
-		if err := validateTransition(issueType, status, claimTargetStatus, dod); err != nil {
+		if err := validateTransition(wf, status, claimTargetStatus, dod); err != nil {
 			// Illegal state machine move (e.g. Epic, Done, Cancelled) →
 			// not claimable. validateTransition's error is descriptive but
 			// we normalise to the sentinel so callers can branch to 400.

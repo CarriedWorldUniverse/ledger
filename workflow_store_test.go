@@ -13,18 +13,18 @@ func TestDefaultWorkflow_MatchesAllowedTransitions(t *testing.T) {
 	wf := defaultWorkflow()
 
 	gotTransitions := workflowTransitionsByFrom(wf)
-	wantTransitions := map[string][]string{}
-	for _, rules := range []map[string][]string{
-		storyLikeTransitions(),
-		allowedTransitions["Epic"],
-	} {
-		for from, to := range rules {
-			existing, ok := wantTransitions[from]
-			if ok && !reflect.DeepEqual(existing, to) {
-				t.Fatalf("conflicting transition for %q: %v vs %v", from, existing, to)
-			}
-			wantTransitions[from] = to
-		}
+	wantTransitions := map[string][]string{
+		"To Do":          {"Ready to Start", "In Progress", "Cancelled"},
+		"Ready to Start": {"In Progress", "Blocked", "To Do", "Cancelled"},
+		"In Progress":    {"Blocked", "In Review", "Ready to Start", "Cancelled"},
+		"Blocked":        {"In Progress", "Ready to Start", "Cancelled"},
+		"In Review":      {"In Progress", "Done", "Cancelled"},
+		"Done":           {},
+		"Cancelled":      {},
+		"Brief":          {"Sketch/Refined", "Cancelled"},
+		"Sketch/Refined": {"In Development", "Brief", "Cancelled"},
+		"In Development": {"Delivered", "Sketch/Refined", "Cancelled"},
+		"Delivered":      {},
 	}
 	if !reflect.DeepEqual(gotTransitions, wantTransitions) {
 		t.Fatalf("transitions mismatch\ngot:  %#v\nwant: %#v", gotTransitions, wantTransitions)
@@ -49,16 +49,6 @@ func TestDefaultWorkflow_MatchesAllowedTransitions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotStates, wantStates) {
 		t.Fatalf("states mismatch\ngot:  %#v\nwant: %#v", gotStates, wantStates)
-	}
-
-	for terminal := range terminalStates {
-		st, ok := gotStates[terminal]
-		if !ok {
-			t.Fatalf("terminal state %q missing from default workflow", terminal)
-		}
-		if !st.dodGate {
-			t.Fatalf("terminal state %q should be a DoD gate", terminal)
-		}
 	}
 }
 

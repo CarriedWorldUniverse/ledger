@@ -185,21 +185,34 @@ func (s *Service) TransitionIssue(ctx context.Context, key, toStatus, actor stri
 		return err
 	}
 
+	var project string
+	err := s.db.QueryRowContext(ctx, `SELECT project FROM issues WHERE key = ?`, key).Scan(&project)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrIssueNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("TransitionIssue: load project %s: %w", key, err)
+	}
+	wf, err := s.workflowForProject(ctx, project)
+	if err != nil {
+		return fmt.Errorf("TransitionIssue: workflow %s: %w", project, err)
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	var issueType, fromStatus, dod string
+	var fromStatus, dod string
 	err = tx.QueryRowContext(ctx,
-		`SELECT type, status, definition_of_done FROM issues WHERE key = ?`, key,
-	).Scan(&issueType, &fromStatus, &dod)
+		`SELECT status, definition_of_done FROM issues WHERE key = ?`, key,
+	).Scan(&fromStatus, &dod)
 	if err != nil {
 		return fmt.Errorf("TransitionIssue: load %s: %w", key, err)
 	}
 
-	if err := validateTransition(issueType, fromStatus, toStatus, dod); err != nil {
+	if err := validateTransition(wf, fromStatus, toStatus, dod); err != nil {
 		return err
 	}
 
