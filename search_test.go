@@ -276,3 +276,56 @@ func TestListReady_SkillFilter(t *testing.T) {
 		t.Fatalf("no-filter len = %d, want 3", len(all))
 	}
 }
+
+func TestListReady_ExcludesBlocked(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+	mk := func(summary string) string {
+		iss, err := svc.CreateIssue(ctx, IssueDraft{Project: "NEX", Type: "Story", Summary: summary,
+			DefinitionOfDone: "- [ ] go", Reporter: "shadow", AssigneeAspect: "anvil"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return iss.Key
+	}
+	blocker := mk("blocker")
+	blocked := mk("blocked")
+	// blocker blocks blocked: 'blocked' is not ready until 'blocker' is terminal.
+	if err := svc.LinkIssues(ctx, blocker, blocked, LinkBlocks, "shadow"); err != nil {
+		t.Fatal(err)
+	}
+
+	readyKeys := func() map[string]bool {
+		refs, err := svc.ListReady(ctx, "anvil", nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]bool{}
+		for _, r := range refs {
+			m[r.Key] = true
+		}
+		return m
+	}
+
+	got := readyKeys()
+	if !got[blocker] {
+		t.Errorf("blocker should be ready (it has no open blocker)")
+	}
+	if got[blocked] {
+		t.Errorf("blocked issue should be excluded while its blocker is open")
+	}
+
+	// Cancel the blocker (terminal) — the blocked issue becomes ready.
+	if err := svc.TransitionIssue(ctx, blocker, "Cancelled", "shadow"); err != nil {
+		t.Fatal(err)
+	}
+	got = readyKeys()
+	if !got[blocked] {
+		t.Errorf("blocked issue should be ready once its blocker is terminal")
+	}
+	if got[blocker] {
+		t.Errorf("cancelled blocker should no longer be ready (not a startable status)")
+	}
+}

@@ -184,16 +184,31 @@ func (s *Service) ListReady(ctx context.Context, aspect string, teams []string, 
 		}
 	}
 
+	// Ready predicate (NEX-645c): beyond assigned + startable-status + skill
+	// match, a ready issue must also be (a) NOT blocked — no open 'blocks'
+	// incoming edge from a non-terminal issue (mirrors IsBlocked, links.go;
+	// kept inline so this stays a single query), and (b) Definition-of-Ready
+	// satisfied — required fields present. CreateIssue enforces (b), but
+	// asserting it here guards against drift / direct DB writes.
+	const readyPredicate = `
+				AND summary != '' AND definition_of_done != '' AND type != ''
+				AND NOT EXISTS (
+				  SELECT 1 FROM issue_links l
+				  JOIN issues b ON b.key = l.from_key
+				  WHERE l.to_key = issues.key AND l.type = 'blocks'
+				    AND b.status NOT IN ('Done', 'Cancelled')
+				)`
+
 	stmt := fmt.Sprintf(`
 			SELECT key, project, type, status, summary, priority,
 			       COALESCE(assignee_aspect, ''), COALESCE(assignee_team, ''), updated_at
 			FROM issues
-			WHERE (%s) AND status IN ('To Do', 'In Progress')%s
+			WHERE (%s) AND status IN ('To Do', 'In Progress')%s%s
 			ORDER BY
 			  CASE priority WHEN 'Highest' THEN 5 WHEN 'High' THEN 4 WHEN 'Medium' THEN 3 WHEN 'Low' THEN 2 ELSE 1 END DESC,
 			  created_at ASC
 			LIMIT 50`,
-		strings.Join(clauses, " OR "), skillFilter)
+		strings.Join(clauses, " OR "), skillFilter, readyPredicate)
 
 	return s.runRefQuery(ctx, stmt, args)
 }
