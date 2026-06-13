@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 )
 
 const bufSize = 1 << 20
@@ -210,6 +211,64 @@ func TestGRPC_TransitionDone_DoDGate_InvalidArgument(t *testing.T) {
 	_, err = clients.issue.TransitionIssue(ctx, &cwbv1.TransitionIssueRequest{Key: key, Status: "Done"})
 	if grpcCode(err) != codes.InvalidArgument {
 		t.Errorf("premature Done: code=%v, want InvalidArgument", grpcCode(err))
+	}
+}
+
+func TestGRPC_ProjectWorkflow_SetGetRoundTrip(t *testing.T) {
+	clients, svc := newTestGRPCServer(t)
+	setupTestOrg(t, svc, "acme", "PROJ")
+
+	writeCtx := mdOutCtx("acme", "agent:test", "issue:write")
+	readCtx := mdOutCtx("acme", "agent:test", "issue:read")
+	want := &cwbv1.Workflow{
+		States: []*cwbv1.WorkflowState{
+			{Name: "Open", Category: cwbv1.StatusCategory_STATUS_CATEGORY_DRAFT},
+			{Name: "Closed", Category: cwbv1.StatusCategory_STATUS_CATEGORY_DONE, DodGate: true},
+		},
+		Transitions: []*cwbv1.WorkflowTransition{
+			{From: "Open", To: []string{"Closed"}},
+			{From: "Closed", To: []string{}},
+		},
+	}
+	if _, err := clients.issue.SetProjectWorkflow(writeCtx, &cwbv1.SetProjectWorkflowRequest{Project: "PROJ", Workflow: want}); err != nil {
+		t.Fatalf("SetProjectWorkflow: %v", err)
+	}
+
+	got, err := clients.issue.GetProjectWorkflow(readCtx, &cwbv1.GetProjectWorkflowRequest{Project: "PROJ"})
+	if err != nil {
+		t.Fatalf("GetProjectWorkflow: %v", err)
+	}
+	if !proto.Equal(got.Workflow, want) {
+		t.Fatalf("workflow mismatch\ngot:  %v\nwant: %v", got.Workflow, want)
+	}
+}
+
+func TestGRPC_ProjectWorkflow_DefaultFallback(t *testing.T) {
+	clients, svc := newTestGRPCServer(t)
+	setupTestOrg(t, svc, "acme", "PROJ")
+
+	resp, err := clients.issue.GetProjectWorkflow(
+		mdOutCtx("acme", "agent:test", "issue:read"),
+		&cwbv1.GetProjectWorkflowRequest{Project: "PROJ"},
+	)
+	if err != nil {
+		t.Fatalf("GetProjectWorkflow: %v", err)
+	}
+	if !proto.Equal(resp.Workflow, defaultWorkflow()) {
+		t.Fatal("GetProjectWorkflow fallback did not return default workflow")
+	}
+}
+
+func TestGRPC_SetProjectWorkflow_RequiresWriteScope(t *testing.T) {
+	clients, svc := newTestGRPCServer(t)
+	setupTestOrg(t, svc, "acme", "PROJ")
+
+	_, err := clients.issue.SetProjectWorkflow(
+		mdOutCtx("acme", "agent:test", "issue:read"),
+		&cwbv1.SetProjectWorkflowRequest{Project: "PROJ", Workflow: defaultWorkflow()},
+	)
+	if grpcCode(err) != codes.PermissionDenied {
+		t.Fatalf("SetProjectWorkflow code = %v, want PermissionDenied", grpcCode(err))
 	}
 }
 
@@ -422,33 +481,51 @@ func TestGRPC_ScopeMatrix(t *testing.T) {
 		wantCode codes.Code
 	}{
 		{
-			name:     "GetIssue requires issue:read",
-			call:     func() error { _, err := clients.issue.GetIssue(mdOutCtx("acme", "agent:test", "issue:write"), &cwbv1.GetIssueRequest{Key: key}); return err },
+			name: "GetIssue requires issue:read",
+			call: func() error {
+				_, err := clients.issue.GetIssue(mdOutCtx("acme", "agent:test", "issue:write"), &cwbv1.GetIssueRequest{Key: key})
+				return err
+			},
 			wantCode: codes.PermissionDenied,
 		},
 		{
-			name:     "CreateIssue requires issue:write",
-			call:     func() error { _, err := clients.issue.CreateIssue(mdOutCtx("acme", "agent:test", "issue:read"), &cwbv1.CreateIssueRequest{}); return err },
+			name: "CreateIssue requires issue:write",
+			call: func() error {
+				_, err := clients.issue.CreateIssue(mdOutCtx("acme", "agent:test", "issue:read"), &cwbv1.CreateIssueRequest{})
+				return err
+			},
 			wantCode: codes.PermissionDenied,
 		},
 		{
-			name:     "ClaimIssue requires issue:claim",
-			call:     func() error { _, err := clients.issue.ClaimIssue(mdOutCtx("acme", "agent:test", "issue:write"), &cwbv1.ClaimIssueRequest{Key: key}); return err },
+			name: "ClaimIssue requires issue:claim",
+			call: func() error {
+				_, err := clients.issue.ClaimIssue(mdOutCtx("acme", "agent:test", "issue:write"), &cwbv1.ClaimIssueRequest{Key: key})
+				return err
+			},
 			wantCode: codes.PermissionDenied,
 		},
 		{
-			name:     "CreateProject requires issue:admin",
-			call:     func() error { _, err := clients.project.CreateProject(mdOutCtx("acme", "agent:test", "issue:write"), &cwbv1.CreateProjectRequest{Key: "X"}); return err },
+			name: "CreateProject requires issue:admin",
+			call: func() error {
+				_, err := clients.project.CreateProject(mdOutCtx("acme", "agent:test", "issue:write"), &cwbv1.CreateProjectRequest{Key: "X"})
+				return err
+			},
 			wantCode: codes.PermissionDenied,
 		},
 		{
-			name:     "PurgeOrg requires org:purge",
-			call:     func() error { _, err := clients.org.PurgeOrg(mdOutCtx("acme", "agent:test", "issue:admin"), &cwbv1.OrgServicePurgeOrgRequest{}); return err },
+			name: "PurgeOrg requires org:purge",
+			call: func() error {
+				_, err := clients.org.PurgeOrg(mdOutCtx("acme", "agent:test", "issue:admin"), &cwbv1.OrgServicePurgeOrgRequest{})
+				return err
+			},
 			wantCode: codes.PermissionDenied,
 		},
 		{
-			name:     "AdminCreateOrg requires issue:admin",
-			call:     func() error { _, err := clients.admin.CreateOrg(mdOutCtx("acme", "agent:test", "issue:read"), &cwbv1.CreateOrgRequest{Slug: "x"}); return err },
+			name: "AdminCreateOrg requires issue:admin",
+			call: func() error {
+				_, err := clients.admin.CreateOrg(mdOutCtx("acme", "agent:test", "issue:read"), &cwbv1.CreateOrgRequest{Slug: "x"})
+				return err
+			},
 			wantCode: codes.PermissionDenied,
 		},
 	}
