@@ -72,9 +72,9 @@ func validateWorkflow(wf *cwbv1.Workflow) error {
 
 // workflowForProject loads a project's stored workflow. Projects without a
 // stored workflow use the in-code default seed.
-func (s *Service) workflowForProject(ctx context.Context, project string) (cwbv1.Workflow, error) {
+func (s *Service) workflowForProject(ctx context.Context, project string) (*cwbv1.Workflow, error) {
 	if _, err := s.GetProject(ctx, project); err != nil {
-		return cwbv1.Workflow{}, err
+		return nil, err
 	}
 
 	var raw string
@@ -83,15 +83,15 @@ func (s *Service) workflowForProject(ctx context.Context, project string) (cwbv1
 		project,
 	).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return *defaultWorkflow(), nil
+		return defaultWorkflow(), nil
 	}
 	if err != nil {
-		return cwbv1.Workflow{}, fmt.Errorf("workflowForProject: load %s: %w", project, err)
+		return nil, fmt.Errorf("workflowForProject: load %s: %w", project, err)
 	}
 
-	var wf cwbv1.Workflow
-	if err := protojson.Unmarshal([]byte(raw), &wf); err != nil {
-		return cwbv1.Workflow{}, fmt.Errorf("workflowForProject: decode %s: %w", project, err)
+	wf := &cwbv1.Workflow{}
+	if err := protojson.Unmarshal([]byte(raw), wf); err != nil {
+		return nil, fmt.Errorf("workflowForProject: decode %s: %w", project, err)
 	}
 	return wf, nil
 }
@@ -129,5 +129,5 @@ func (s *Service) GetProjectWorkflow(ctx context.Context, project string) (*cwbv
 	if err != nil {
 		return nil, err
 	}
-	return proto.Clone(&wf).(*cwbv1.Workflow), nil
+	return proto.Clone(wf).(*cwbv1.Workflow), nil
 }

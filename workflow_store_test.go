@@ -73,7 +73,7 @@ func TestWorkflowForProject_DefaultFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflowForProject: %v", err)
 	}
-	if !proto.Equal(&got, defaultWorkflow()) {
+	if !proto.Equal(got, defaultWorkflow()) {
 		t.Fatalf("workflowForProject fallback did not return default workflow")
 	}
 }
