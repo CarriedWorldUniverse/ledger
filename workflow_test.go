@@ -3,6 +3,8 @@ package ledger
 import (
 	"context"
 	"testing"
+
+	cwbv1 "github.com/CarriedWorldUniverse/cwb-proto/gen/go/cwb/v1"
 )
 
 func TestTransition_Story_HappyPath(t *testing.T) {
@@ -85,6 +87,123 @@ func TestTransition_RejectsInvalid(t *testing.T) {
 	err := svc.TransitionIssue(ctx, issue.Key, "Done", "anvil")
 	if err == nil {
 		t.Fatalf("expected error on direct To Do → Done")
+	}
+}
+
+func TestTransition_CustomWorkflow_AllowsLoop(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	if err := svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetProjectWorkflow(ctx, "NEX", &cwbv1.Workflow{
+		States: []*cwbv1.WorkflowState{
+			{Name: "To Do", Category: cwbv1.StatusCategory_STATUS_CATEGORY_DRAFT},
+			{Name: "In Progress", Category: cwbv1.StatusCategory_STATUS_CATEGORY_ACTIVE},
+			{Name: "In Review", Category: cwbv1.StatusCategory_STATUS_CATEGORY_IN_REVIEW},
+		},
+		Transitions: []*cwbv1.WorkflowTransition{
+			{From: "To Do", To: []string{"In Progress"}},
+			{From: "In Progress", To: []string{"In Review"}},
+			{From: "In Review", To: []string{"In Progress"}},
+		},
+	}); err != nil {
+		t.Fatalf("SetProjectWorkflow: %v", err)
+	}
+	issue, err := svc.CreateIssue(ctx, IssueDraft{
+		Project:          "NEX",
+		Type:             "Story",
+		Summary:          "X",
+		DefinitionOfDone: "- [ ] custom still open",
+		Reporter:         "shadow",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.TransitionIssue(ctx, issue.Key, "In Progress", "anvil"); err != nil {
+		t.Fatalf("To Do→In Progress: %v", err)
+	}
+	if err := svc.TransitionIssue(ctx, issue.Key, "In Review", "anvil"); err != nil {
+		t.Fatalf("In Progress→In Review: %v", err)
+	}
+	if err := svc.TransitionIssue(ctx, issue.Key, "In Progress", "anvil"); err != nil {
+		t.Fatalf("In Review→In Progress custom loop: %v", err)
+	}
+}
+
+func TestTransition_CustomWorkflow_DoDGateBlocksUntickedDoD(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	if err := svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetProjectWorkflow(ctx, "NEX", &cwbv1.Workflow{
+		States: []*cwbv1.WorkflowState{
+			{Name: "To Do", Category: cwbv1.StatusCategory_STATUS_CATEGORY_DRAFT},
+			{Name: "Verified", Category: cwbv1.StatusCategory_STATUS_CATEGORY_DONE, DodGate: true},
+		},
+		Transitions: []*cwbv1.WorkflowTransition{
+			{From: "To Do", To: []string{"Verified"}},
+			{From: "Verified", To: []string{}},
+		},
+	}); err != nil {
+		t.Fatalf("SetProjectWorkflow: %v", err)
+	}
+	issue, err := svc.CreateIssue(ctx, IssueDraft{
+		Project:          "NEX",
+		Type:             "Story",
+		Summary:          "X",
+		DefinitionOfDone: "- [ ] not done yet",
+		Reporter:         "shadow",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = svc.TransitionIssue(ctx, issue.Key, "Verified", "anvil")
+	if err == nil {
+		t.Fatalf("expected DoD gate to block transition to Verified")
+	}
+}
+
+func TestTransition_CustomWorkflow_RejectsDisallowedTransition(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	if err := svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetProjectWorkflow(ctx, "NEX", &cwbv1.Workflow{
+		States: []*cwbv1.WorkflowState{
+			{Name: "To Do", Category: cwbv1.StatusCategory_STATUS_CATEGORY_DRAFT},
+			{Name: "In Progress", Category: cwbv1.StatusCategory_STATUS_CATEGORY_ACTIVE},
+			{Name: "Done", Category: cwbv1.StatusCategory_STATUS_CATEGORY_DONE, DodGate: true},
+		},
+		Transitions: []*cwbv1.WorkflowTransition{
+			{From: "To Do", To: []string{"In Progress"}},
+			{From: "In Progress", To: []string{}},
+			{From: "Done", To: []string{}},
+		},
+	}); err != nil {
+		t.Fatalf("SetProjectWorkflow: %v", err)
+	}
+	issue, err := svc.CreateIssue(ctx, IssueDraft{
+		Project:          "NEX",
+		Type:             "Story",
+		Summary:          "X",
+		DefinitionOfDone: "- [x] done",
+		Reporter:         "shadow",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = svc.TransitionIssue(ctx, issue.Key, "Done", "anvil")
+	if err == nil {
+		t.Fatalf("expected workflow to reject direct To Do→Done")
 	}
 }
 
