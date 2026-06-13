@@ -28,6 +28,7 @@ func toStatus(err error) error {
 	case errors.Is(err, ErrAlreadyClaimed):
 		return status.Error(codes.Aborted, err.Error())
 	case errors.Is(err, ErrNotClaimable),
+		errors.Is(err, ErrInvalidWorkflow),
 		errors.Is(err, ErrInvalidLinkType),
 		errors.Is(err, ErrSelfLink),
 		errors.Is(err, ErrCrossProjectParent),

@@ -355,3 +355,17 @@ WHERE kind = 'comment'
   );
 
 INSERT OR IGNORE INTO schema_versions(version) VALUES (12);
+
+-- -------------------------------------------------------------------
+-- Project workflows (v13)
+-- -------------------------------------------------------------------
+-- One workflow per project, stored as protojson so the cwb-proto
+-- Workflow contract remains the storage contract. Projects without a
+-- stored workflow use the in-code defaultWorkflow seed.
+CREATE TABLE IF NOT EXISTS workflows (
+  project       TEXT PRIMARY KEY REFERENCES projects(key) ON DELETE CASCADE,
+  workflow_json TEXT NOT NULL,
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO schema_versions(version) VALUES (13);

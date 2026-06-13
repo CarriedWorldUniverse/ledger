@@ -134,6 +134,35 @@ func (s *issueServer) TransitionIssue(ctx context.Context, r *cwbv1.TransitionIs
 	return &cwbv1.TransitionIssueResponse{}, nil
 }
 
+func (s *issueServer) SetProjectWorkflow(ctx context.Context, r *cwbv1.SetProjectWorkflowRequest) (*cwbv1.SetProjectWorkflowResponse, error) {
+	claims, scopes, ok := identityFromMD(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "missing identity")
+	}
+	if !hasScope(scopes, "issue:write") {
+		return nil, status.Error(codes.PermissionDenied, "missing scope issue:write")
+	}
+	if err := s.svc.SetProjectWorkflow(ContextWithAuth(ctx, claims), r.Project, r.Workflow); err != nil {
+		return nil, toStatus(err)
+	}
+	return &cwbv1.SetProjectWorkflowResponse{}, nil
+}
+
+func (s *issueServer) GetProjectWorkflow(ctx context.Context, r *cwbv1.GetProjectWorkflowRequest) (*cwbv1.GetProjectWorkflowResponse, error) {
+	claims, scopes, ok := identityFromMD(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "missing identity")
+	}
+	if !hasScope(scopes, "issue:read") {
+		return nil, status.Error(codes.PermissionDenied, "missing scope issue:read")
+	}
+	wf, err := s.svc.GetProjectWorkflow(ContextWithAuth(ctx, claims), r.Project)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &cwbv1.GetProjectWorkflowResponse{Workflow: wf}, nil
+}
+
 func (s *issueServer) AssignIssue(ctx context.Context, r *cwbv1.AssignIssueRequest) (*cwbv1.AssignIssueResponse, error) {
 	claims, scopes, ok := identityFromMD(ctx)
 	if !ok {
