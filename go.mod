@@ -3,7 +3,7 @@ module github.com/CarriedWorldUniverse/ledger
 go 1.26.3
 
 require (
-	github.com/CarriedWorldUniverse/cwb-proto v0.0.0-20260613070547-aa34afef0de1
+	github.com/CarriedWorldUniverse/cwb-proto v0.0.0-20260613191908-362c19c9dfd7
 	github.com/ncruces/go-sqlite3 v0.34.1
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11

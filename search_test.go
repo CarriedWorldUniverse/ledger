@@ -198,11 +198,81 @@ func TestListReady_ExcludesNonStartable(t *testing.T) {
 	_, _ = svc.CreateIssue(ctx, IssueDraft{Project: "NEX", Type: "Story", Summary: "ready",
 		DefinitionOfDone: "- [ ] go", Reporter: "shadow", AssigneeAspect: "anvil"})
 
-	results, err := svc.ListReady(ctx, "anvil", nil)
+	results, err := svc.ListReady(ctx, "anvil", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 1 {
 		t.Fatalf("len = %d, want 1", len(results))
+	}
+}
+
+func TestCreateIssue_SkillsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+
+	created, err := svc.CreateIssue(ctx, IssueDraft{Project: "NEX", Type: "Story", Summary: "skilled",
+		DefinitionOfDone: "- [ ] go", Reporter: "shadow", AssigneeAspect: "anvil",
+		Skills: []string{"go", "ledger"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// CreateIssue returns via GetIssue, so this already exercises the read path.
+	if got := created.Skills; len(got) != 2 || got[0] != "go" || got[1] != "ledger" {
+		t.Fatalf("created skills = %v, want [go ledger]", got)
+	}
+	// Explicit re-fetch to be sure it persisted.
+	fetched, err := svc.GetIssue(ctx, created.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fetched.Skills) != 2 {
+		t.Fatalf("fetched skills = %v, want 2", fetched.Skills)
+	}
+}
+
+func TestListReady_SkillFilter(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defer svc.Close()
+	_ = svc.CreateProject(ctx, Project{Key: "NEX", Name: "Nexus"})
+	mk := func(summary string, skills []string) string {
+		iss, err := svc.CreateIssue(ctx, IssueDraft{Project: "NEX", Type: "Story", Summary: summary,
+			DefinitionOfDone: "- [ ] go", Reporter: "shadow", AssigneeAspect: "anvil", Skills: skills})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return iss.Key
+	}
+	goKey := mk("go work", []string{"go"})
+	mixKey := mk("mixed", []string{"rust", "python"}) // requires a skill the worker lacks
+	bareKey := mk("no skills", nil)
+
+	// Worker serves only "go": should get the go issue + the no-skill issue,
+	// NOT the rust/python one (python ⊄ {go}).
+	got, err := svc.ListReady(ctx, "anvil", nil, []string{"go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]bool{}
+	for _, r := range got {
+		keys[r.Key] = true
+	}
+	if !keys[goKey] || !keys[bareKey] {
+		t.Errorf("want go+bare in results, got %v", keys)
+	}
+	if keys[mixKey] {
+		t.Errorf("rust/python issue should be excluded for a go-only worker")
+	}
+
+	// Empty skill set = no filtering: all three returned.
+	all, err := svc.ListReady(ctx, "anvil", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("no-filter len = %d, want 3", len(all))
 	}
 }

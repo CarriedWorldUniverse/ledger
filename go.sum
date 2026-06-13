@@ -1,5 +1,5 @@
-github.com/CarriedWorldUniverse/cwb-proto v0.0.0-20260613070547-aa34afef0de1 h1:Zz8xx3AJPZVqgjr1ESU6YbGyVX5aV+/enh0nZnJhpOY=
-github.com/CarriedWorldUniverse/cwb-proto v0.0.0-20260613070547-aa34afef0de1/go.mod h1:SBXfS7WeuwK80SZrysL1YC0oDrNlNYoXqgWKkeK80wE=
+github.com/CarriedWorldUniverse/cwb-proto v0.0.0-20260613191908-362c19c9dfd7 h1:L3fcQpEUvRAsRaKqGGOvIBUXKa+ErQ50Tha9i88Cz0g=
+github.com/CarriedWorldUniverse/cwb-proto v0.0.0-20260613191908-362c19c9dfd7/go.mod h1:SBXfS7WeuwK80SZrysL1YC0oDrNlNYoXqgWKkeK80wE=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=

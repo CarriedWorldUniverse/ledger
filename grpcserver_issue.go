@@ -77,6 +77,7 @@ func (s *issueServer) CreateIssue(ctx context.Context, r *cwbv1.CreateIssueReque
 		AssigneeAspect:   r.AssigneeAspect,
 		AssigneeTeam:     r.AssigneeTeam,
 		ExternalRefs:     fromProtoExternalRefs(r.ExternalRefs),
+		Skills:           r.Skills,
 	}
 	iss, err := s.svc.CreateIssue(ContextWithAuth(ctx, claims), d)
 	if err != nil {
@@ -430,7 +431,7 @@ func (s *issueServer) ListReadyIssues(ctx context.Context, r *cwbv1.ListReadyIss
 	if aspect == "" {
 		aspect = r.Aspect
 	}
-	refs, err := s.svc.ListReady(ContextWithAuth(ctx, claims), aspect, nil)
+	refs, err := s.svc.ListReady(ContextWithAuth(ctx, claims), aspect, nil, r.Skills)
 	if err != nil {
 		return nil, toStatus(err)
 	}
