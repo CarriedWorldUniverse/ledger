@@ -196,9 +196,10 @@ INSERT OR IGNORE INTO schema_versions(version) VALUES (8);
 -- Issue links (v9) — explicit edges between issues distinct from
 -- parent_key (which is the epic-child hierarchy). v1 supports:
 --
---   'blocks'     from_key cannot be Done until to_key is terminal.
---                Load-bearing for the orchestration scheduler — the
---                "next unblocked task" computation queries this.
+--   'blocks'     from_key blocks to_key: to_key is not ready / cannot
+--                proceed until from_key is terminal (Done/Cancelled).
+--                Load-bearing for the orchestration scheduler — IsBlocked
+--                and the ListReady ready-predicate query this (by to_key).
 --   'relates-to' editorial cross-reference; no orchestration effect.
 --
 -- Future types (duplicates, etc.) are validated at the application
